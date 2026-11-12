@@ -1,0 +1,10 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "auto_rust_backend"
+backend-path = ["."]
+
+[project]
+name = "rust_clob"
+version = "0.1.0"
+description = "Ultra-low-latency Rust EIP-712/ERC-1271 Order Signer and HTTP/1.1 Keep-Alive Executor for Polymarket CLOB V2"
+requires-python = ">=3.10"
