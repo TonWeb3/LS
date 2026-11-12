@@ -58,6 +58,15 @@
     "redeem_after_resolution": true,
     "confirm_official": true
   },
+  "copy_fak": {
+    "enabled": true,
+    "cap_cents": 0.0,
+    "high_cap_cents": 5.0,
+    "high_from_price": 0.55,
+    "stake_pct": 19.0,
+    "count_fee": true,
+    "fee_rate": 0.07
+  },
   "flip": {
     "enabled": false,
     "min_conviction": 0.8,
@@ -72,8 +81,7 @@
   "funder_address": "",
   "longshot": {
     "max_per_window": 1,
-    "look_s": 60,
-    "cutoff_s": 3.0,
+    "look_s": 60.0,
     "maker": {
       "price": 0.01
     },
@@ -90,7 +98,7 @@
     "sniper_enabled": true,
     "maker_enabled": true,
     "engine_enabled": true,
-    "engine_max_price": 0.10,
+    "engine_max_price": 0.1,
     "engine_min_seconds_left": 2.0,
     "engine_cap_cents": 2.0,
     "engine_stake_pct": 0,

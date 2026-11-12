@@ -17,12 +17,20 @@ by hand any more.
 All clients are synchronous — call from the event loop via `asyncio.to_thread`.
 """
 
+import asyncio
+import concurrent.futures
+import functools
 import sys
 import threading
 from datetime import datetime
 import time
 from typing import Optional, Dict, Any, List, Tuple
+import requests
 from .config import settings
+
+# Dedicated unshared thread pool for live order operations — orders NEVER queue behind
+# state saves, balance calls, or status checks on asyncio's shared thread pool
+ORDER_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order-io")
 
 
 def _to_float(x) -> Optional[float]:
@@ -152,23 +160,11 @@ def _ensure_rust_clob():
     src_file = os.path.join(crate_dir, "src", "lib.rs")
     cargo_file = os.path.join(crate_dir, "Cargo.toml")
 
-    rebuild_needed = False
     try:
         import rust_clob
-        mod_file = getattr(rust_clob, "__file__", None)
-        if mod_file and os.path.exists(mod_file):
-            bin_mtime = os.path.getmtime(mod_file)
-            src_dir = os.path.dirname(src_file)
-            watched = [cargo_file] + ([os.path.join(src_dir, f) for f in os.listdir(src_dir) if f.endswith(".rs")]
-                                      if os.path.isdir(src_dir) else [src_file])
-            for src_p in watched:
-                if os.path.exists(src_p) and os.path.getmtime(src_p) > bin_mtime:
-                    rebuild_needed = True
-                    break
-        if not rebuild_needed:
-            return rust_clob
+        return rust_clob
     except ImportError:
-        rebuild_needed = True
+        pass
 
     if not os.path.isdir(crate_dir):
         raise RuntimeError(f"Missing rust_clob crate directory at {crate_dir}")
@@ -269,6 +265,8 @@ class ClobTrader:
         self._signer_mode: str = ""            # type-3 order signer in the Rust state: "wallet" | "eoa"
         self._signer_ok: Optional[Tuple[str, str, str]] = None  # (eoa, wallet, mode) Polymarket accepted
         self._rust_can_switch = False          # rust_clob built from the new lib.rs
+        self._setup_bg_running = False         # PATCH latency: wallet setup tried in the background
+        self._setup_bg_last = 0.0
         self._log_hook = None
 
     # ── logging into the app log (main.py registers log_message) ────────────────
@@ -836,10 +834,7 @@ class ClobTrader:
         if not self.ensure_ready():
             return {"ok": False, "error": self.last_error or "client_not_ready"}
         if not self._approvals_done and settings.RELAYER_API_KEY:
-            try:
-                self.ensure_setup()
-            except Exception:
-                pass
+            self._setup_in_background()
         try:
             tick, otype = self._tick_and_type(tick_size, order_type)
             self.warm_token(token_id, tick)
@@ -891,21 +886,73 @@ class ClobTrader:
             "response": data
         }
 
+    def _rust_mod_or_none(self):
+        try:
+            return _ensure_rust_clob()
+        except Exception:
+            return None
+
+    def has_fast_sender(self) -> bool:
+        """True when the loaded rust_clob build has its own sender threads (post_order_async)."""
+        mod = self._rust_mod_or_none()
+        return mod is not None and hasattr(mod, "post_order_async") and hasattr(mod, "post_order_wait")
+
+    def _setup_in_background(self):
+        """The one-time wallet setup (relayer approvals: several seconds of on-chain calls) used
+        to run inside the order call whenever it wasn't marked done, so that order waited for
+        it. The fast path sends the order at once and tries the setup in a background thread
+        instead, at most once a minute."""
+        if self._approvals_done or not settings.RELAYER_API_KEY:
+            return
+        now = time.time()
+        if self._setup_bg_running or now - self._setup_bg_last < 60.0:
+            return
+        self._setup_bg_running, self._setup_bg_last = True, now
+        def run():
+            try:
+                self.ensure_setup()
+            finally:
+                self._setup_bg_running = False
+        threading.Thread(target=run, name="wallet-setup", daemon=True).start()
+
+    def _order_json(self, res: Dict[str, Any]) -> Dict[str, Any]:
+        """rust_clob's answer dict -> Polymarket's JSON for the order; raises on a refusal or a
+        transport error. Split out so order response parsing runs cleanly across threads."""
+        import json
+        http_status = int(res.get("http_status") or 0)
+        resp_text = res.get("response_text") or ""
+        if not res.get("ok_http"):
+            err_detail = resp_text
+            try:
+                err_json = json.loads(resp_text)
+                err_detail = err_json.get("error") or err_json.get("errorMsg") or err_json.get("message") or resp_text
+            except Exception:
+                pass
+            raise RuntimeError(f"OrderPlacementError: Order placement failed: HTTP {http_status} - {err_detail}")
+        try:
+            return json.loads(resp_text)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse order response: {resp_text} ({e})")
+
+    def run_io(self, fn, *args):
+        """Run a blocking order call on the dedicated order threads (ORDER_POOL)."""
+        return asyncio.get_running_loop().run_in_executor(ORDER_POOL, functools.partial(fn, *args))
+
     async def place_limit_buy_async(self, token_id: str, size: float, price: float,
                                     expiration: Optional[int] = None, tick_size: str = "0.01",
                                     order_type: str = "GTD", post_only: bool = False) -> Dict[str, Any]:
         """place_limit_buy() without waiting for a Python thread: the order is signed right
         here (about 0.1 ms) and sent by rust_clob's own threads, so it leaves at once even
         while Python is busy with something else. Same result dict. Falls back to
-        place_limit_buy() in a thread when the client isn't set up yet or rust_clob was
+        place_limit_buy() in a dedicated order thread when the client isn't set up yet or rust_clob was
         built before post_order_async existed."""
         import asyncio
         mod = sys.modules.get("rust_clob")
         if (not token_id or not (self.ready and self._rust_ready) or mod is None
                 or not hasattr(mod, "post_order_async")
                 or (not self._approvals_done and settings.RELAYER_API_KEY)):
-            return await asyncio.to_thread(self.place_limit_buy, token_id, size, price, expiration, tick_size, order_type,
-                                           post_only)
+            return await self.run_io(self.place_limit_buy, token_id, size, price, expiration, tick_size, order_type,
+                                     post_only)
         try:
             tick, otype = self._tick_and_type(tick_size, order_type)
             self.warm_token(token_id, tick)
@@ -923,22 +970,30 @@ class ClobTrader:
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
         try:
-            res = await asyncio.to_thread(mod.post_order_wait, ticket, 30.0)
-            data = await asyncio.to_thread(self._finish_post, res, post_args, mod)
+            res = await self.run_io(mod.post_order_wait, ticket, 30.0)
+            data = await self.run_io(self._finish_post, res, post_args, mod)
             return self._limit_buy_result(data, order_price, order_size, exp)
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     def keep_warm(self) -> Optional[Dict[str, Any]]:
-        """A small request over the Rust order connection (main.py's order_conn_keeper), so
+        """A small request over the order connection (main.py's order_conn_keeper), so
         it's open when the next order goes out."""
         if not (self.ready and self._rust_ready):
             return None
         mod = sys.modules.get("rust_clob")
-        if mod is None or not hasattr(mod, "warm_connection"):
-            return None
+        if mod is not None and hasattr(mod, "warm_connection"):
+            try:
+                return mod.warm_connection("/time")
+            except Exception as e:
+                pass
+        # Fallback: keep connection pool / TLS session to Polymarket CLOB hot
         try:
-            return mod.warm_connection("/time")
+            if not hasattr(self, "_warm_session") or self._warm_session is None:
+                self._warm_session = requests.Session()
+            url = f"{getattr(settings, 'CLOB_BASE_URL', 'https://clob.polymarket.com')}/time"
+            r = self._warm_session.get(url, timeout=2.0)
+            return {"http_status": r.status_code}
         except Exception as e:
             return {"http_status": 0, "transport_error": f"{type(e).__name__}: {e}"}
 
@@ -949,10 +1004,7 @@ class ClobTrader:
         if not self.ensure_ready():
             return {"ok": False, "error": self.last_error or "client_not_ready"}
         if not self._approvals_done and settings.RELAYER_API_KEY:
-            try:
-                self.ensure_setup()
-            except Exception:
-                pass
+            self._setup_in_background()
         try:
             from polymarket_apis.utilities.order_builder.builder import ROUNDING_CONFIG
             order_price = round(float(price), 4)

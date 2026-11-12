@@ -182,57 +182,7 @@
                         </div>
                     </div>
                     <p class="text-[10px] text-gray-500 mt-2 italic">Places a resting GTD maker bid (default 1¢) in the final minute.</p>
-
-                    <!-- PATCH: longshot engine -->
-                    <div class="pt-3 border-t border-gray-700/60">
-                        <label class="flex items-center gap-3 bg-gray-700 rounded-lg p-2.5 text-white cursor-pointer">
-                            <input type="checkbox" x-model="form.longshot.engine_enabled" class="w-5 h-5">
-                            <span>Engine long shots: the GTD engine's own cheap entries (the paper bot's kind)</span>
-                        </label>
-                        <p class="text-[10px] text-gray-500 mt-2 italic">A regular GTD entry (same model, gates and vetoes) at an ask of the max price or less is taken as a long shot: in the long shots' slot next to the window's regular trade, any side (Follow doesn't apply), with its own stake. Its live copy is one fill-and-kill order at the paper entry + the cap, never re-quoted. It keeps checking down to the min seconds left, where the regular check stops 5 s before the end. Every one goes to logs/longshots.csv.</p>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3" :class="form.longshot.engine_enabled ? '' : 'opacity-50'">
-                            <div>
-                                <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Engine Long Shot Max Price ($)</label>
-                                <input type="number" step="0.001" min="0.001" max="0.99" x-model.number="form.longshot.engine_max_price" :disabled="!form.longshot.engine_enabled" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0.10">
-                                <p class="text-[10px] text-gray-500 mt-2 italic">An entry at this ask or less is a long shot (default 10¢).</p>
-                            </div>
-                            <div>
-                                <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Engine Long Shot Min Seconds Left</label>
-                                <input type="number" step="0.5" min="0" max="900" x-model.number="form.longshot.engine_min_seconds_left" :disabled="!form.longshot.engine_enabled" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="2">
-                                <p class="text-[10px] text-gray-500 mt-2 italic">None with less time left. Under 5 s the engine keeps checking where the regular check has stopped; the paper bot's latest came 2.1 s before the end.</p>
-                            </div>
-                            <div>
-                                <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Engine Live Order: Max Above Paper Entry (¢)</label>
-                                <input type="number" step="0.5" min="0" max="99" x-model.number="form.longshot.engine_cap_cents" :disabled="!form.longshot.engine_enabled" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="2">
-                                <p class="text-[10px] text-gray-500 mt-2 italic">One fill-and-kill order at the paper entry + this, rounded down to the tick. Takes what's offered at that price or better; never re-quoted.</p>
-                            </div>
-                            <div>
-                                <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Engine Long Shot Stake (% of balance)</label>
-                                <input type="number" step="any" min="0" max="100" x-model.number="form.longshot.engine_stake_pct" :disabled="!form.longshot.engine_enabled" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0">
-                                <p class="text-[10px] text-gray-500 mt-2 italic">Each engine long shot. At least $1. 0 = the GTD stake (what the paper bot staked).</p>
-                            </div>
-                        </div>
-                        <label class="flex items-center gap-2 mt-3" :class="form.longshot.engine_enabled ? '' : 'opacity-50'">
-                            <input type="checkbox" x-model="form.longshot.engine_own_slot" :disabled="!form.longshot.engine_enabled" class="w-4 h-4">
-                            <span class="text-sm text-gray-300">Own slot: next to the window's regular trade. Untick for TOG's rule: only when the window has no open position, and no regular trade after it.</span>
-                        </label>
-                    </div>
                 </div>
-            </div>
-
-            <!-- PATCH: official results -->
-            <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
-                <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Results &amp; Redeem</h2>
-                <label class="flex items-center gap-3 bg-gray-700 rounded-lg p-2.5 text-white cursor-pointer">
-                    <input type="checkbox" x-model="form.settlement.redeem_after_resolution" class="w-5 h-5">
-                    <span>Redeem winners after Polymarket's resolution, and retry</span>
-                </label>
-                <p class="text-[10px] text-gray-500 mt-2 italic">Off: one try at the moment a win is booked, which is before Polymarket has resolved the market; a refusal is final. On: no try at booking. The bot waits until Polymarket's market data shows the result (market closed, prices exactly 1 and 0), redeems the winning side then with one call per market, and after a refusal tries again in 20 s, 40 s, 1, 2, 5, 10, 20 and 30 min.</p>
-                <label class="flex items-center gap-3 bg-gray-700 rounded-lg p-2.5 text-white cursor-pointer mt-4">
-                    <input type="checkbox" x-model="form.settlement.confirm_official" class="w-5 h-5">
-                    <span>Check results against Polymarket's, and correct the list</span>
-                </label>
-                <p class="text-[10px] text-gray-500 mt-2 italic">The bot books a result from Polymarket's price at the close (over 90¢) or, after 90 s without one, from its own BTC price against its own strike. On: each booked trade is checked against Polymarket's own resolution a few minutes later. One that differs is corrected (result, paper and live P/L, paper balance) and logged as RESULT CORRECTED.</p>
             </div>
 
             <!-- Auto-withdrawal (capital extractor) -->
@@ -480,6 +430,29 @@
                 </div>
             </div>
 
+            <!-- Backend defaults (hidden to keep frontend clean and focused) -->
+            <div style="display: none;" aria-hidden="true">
+                <h2>Fill-and-Kill Copy</h2>
+                <input type="checkbox" x-model="form.copy_fak.enabled">
+                <input type="number" step="0.5" min="0" max="99" x-model.number="form.copy_fak.cap_cents">
+                <input type="number" step="0.01" min="0.01" max="1" x-model.number="form.copy_fak.high_from_price">
+                <input type="number" step="0.5" min="0" max="99" x-model.number="form.copy_fak.high_cap_cents">
+                <input type="number" step="0.5" min="0" max="100" x-model.number="form.copy_fak.stake_pct">
+                <input type="number" step="0.01" min="0" max="1" x-model.number="form.copy_fak.fee_rate">
+                <input type="checkbox" x-model="form.copy_fak.count_fee">
+
+                <h2>Results &amp; Redeem</h2>
+                <input type="checkbox" x-model="form.settlement.redeem_after_resolution">
+                <input type="checkbox" x-model="form.settlement.confirm_official">
+
+                <input type="checkbox" x-model="form.longshot.engine_enabled">
+                <input type="number" step="0.001" min="0.001" max="0.99" x-model.number="form.longshot.engine_max_price">
+                <input type="number" step="0.5" min="0" max="900" x-model.number="form.longshot.engine_min_seconds_left">
+                <input type="number" step="0.5" min="0" max="99" x-model.number="form.longshot.engine_cap_cents">
+                <input type="number" step="any" min="0" max="100" x-model.number="form.longshot.engine_stake_pct">
+                <input type="checkbox" x-model="form.longshot.engine_own_slot">
+            </div>
+
             <div class="flex justify-center sm:justify-end">
                 <button type="submit" class="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white font-black py-4 px-12 rounded-xl shadow-xl transition transform active:scale-95 duration-200">
                     SAVE CHANGES
@@ -718,9 +691,10 @@
                     ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0 },
                     live: { relayer_api_key: '', alchemy_api_key: '', funder_address: '', max_slippage: 0.02 },
                     flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 },
+                    copy_fak: { enabled: true, cap_cents: 0, high_cap_cents: 5, high_from_price: 0.55, stake_pct: 19, count_fee: true, fee_rate: 0.07 },
                     capital_extractor: { enabled: false, trigger_balance: 2000, withdraw_amount: 1000, withdraw_address: '', auto_resume_after_withdrawal: true, resume_after: 'submitted', default_destination: '' },
                     telegram: { enabled: false, bot_token: '' },
-                    settlement: { redeem_after_resolution: false, confirm_official: false },   // PATCH: official results
+                    settlement: { redeem_after_resolution: false, confirm_official: false },
                     longshot: {
                         max_per_window: 1,
                         look_s: 60,
@@ -729,7 +703,7 @@
                         maker_stake_pct: 1,
                         sniper_enabled: true,
                         maker_enabled: true,
-                        engine_enabled: false,   // PATCH: longshot engine
+                        engine_enabled: false,
                         engine_max_price: 0.10,
                         engine_min_seconds_left: 2,
                         engine_cap_cents: 2,
@@ -790,6 +764,7 @@
                                          'capital_extractor', 'telegram', 'longshot', 'settlement']) {   // PATCH: official results (settlement)
                             res[k] = Object.assign({}, this.form[k], res[k] || {});
                         }
+                        res.copy_fak = Object.assign({}, this.form.copy_fak, res.copy_fak || {});   // PATCH: fill-and-kill copy
                         this.form = res;
                         if (!this.form.trading || !this.form.trading.symbol || !this.form.trading.symbol.trim()) {
                             this.form.trading = this.form.trading || {};

@@ -30,6 +30,7 @@ import bot.indicators as indicators
 import bot.engines as engines
 import bot.utils as utils
 from bot.clob_trader import clob_trader
+import bot.copy_fak as copy_fak            # PATCH: fill-and-kill copy
 import bot.longshot as longshot          # PATCH: longshot
 import bot.ls_maker as ls_maker          # PATCH: longshot maker
 from types import SimpleNamespace        # PATCH: longshot maker
@@ -1056,6 +1057,22 @@ async def _continuous_live_copy_fill(trade: Dict[str, Any], market: Dict[str, An
         log_message(f"LIVE copy aborted: missing token_id for side {side}")
         for k in slot_keys:
             _in_flight_markets.discard(k)
+        return
+
+    # PATCH: fill-and-kill copy (Settings -> Fill-and-Kill Copy, config.json "copy_fak"). On: a
+    # regular trade's live copy is ONE fill-and-kill order at the paper entry + the cap, sized in
+    # dollars. Nothing is left on the book and nothing is re-quoted (bot/copy_fak.py). Long shots
+    # keep their own orders. Off: the GTD loop below, as before.
+    if not is_ls and copy_fak.on(settings.COPY_FAK):
+        try:
+            await copy_fak.live_copy(trade, evaluated_price, settings=settings, state=state, trader=clob_trader,
+                                     log=log_message, save=save_state, sync=_sync_active_trades_to_latest_data,
+                                     broadcast=broadcast_state, telegram=send_telegram, order_sent=order_sent)
+        finally:
+            if order_sent is not None:
+                order_sent.set()
+            for k in slot_keys:
+                _in_flight_markets.discard(k)
         return
 
     # (the "LIVE copy started" line is written after the first order went out: no file write before it)
@@ -4175,6 +4192,7 @@ async def get_settings():
             "exit_max_retries": settings.EXIT_MAX_RETRIES,
             "allow_partial_fill": settings.CLOB_ALLOW_PARTIAL_FILL
         },
+        "copy_fak": copy_fak.merged(settings.COPY_FAK),   # PATCH: fill-and-kill copy
         "polymarket": {
             "series_id": settings.POLYMARKET_SERIES_ID,
             "gamma_base_url": settings.GAMMA_BASE_URL,
@@ -4227,6 +4245,14 @@ async def get_settings():
 async def post_settings(new_settings: Dict[str, Any]):
     global binance_stream, polymarket_ws_stream, chainlink_ws_stream, binance_kline_1m, binance_kline_5m
     old_symbol = settings.SYMBOL
+    # PATCH: fill-and-kill copy — its settings are checked before anything is saved or changed
+    _fk_new = None
+    if "copy_fak" in new_settings:
+        try:
+            _fk_new = copy_fak.normalize(new_settings["copy_fak"], settings.COPY_FAK)
+        except ValueError as e:
+            return {"status": "error", "error": f"invalid_settings: {e}"}
+        new_settings["copy_fak"] = _fk_new
 
     lv_in = new_settings.get("live") if isinstance(new_settings.get("live"), dict) else None
     _new_signer = None
@@ -4356,6 +4382,10 @@ async def post_settings(new_settings: Dict[str, Any]):
 
     with open(CONFIG_PATH, "w") as f:
         json.dump(merged_cfg, f, indent=2)
+    if _fk_new is not None:   # PATCH: fill-and-kill copy — in use from the next trade
+        if _fk_new != copy_fak.merged(settings.COPY_FAK):
+            log_message(copy_fak.status_line(_fk_new))
+        settings.COPY_FAK = _fk_new
 
     # Apply the checked sections
     if new_ls is not None:
@@ -4481,6 +4511,10 @@ async def post_settings(new_settings: Dict[str, Any]):
         chainlink_ws_stream = ws_data.ChainlinkPriceStream(aggregator=settings.get_aggregator(settings.SYMBOL), on_update=_on_chainlink_tick)
         asyncio.create_task(chainlink_ws_stream.start())
 
+    # PATCH: fill-and-kill copy — saving resets the live client (above) and the next order would
+    # set it up again first (several network calls). With the one-order copy on, set it up now.
+    if settings.PRIVATE_KEY and copy_fak.on(settings.COPY_FAK):
+        asyncio.create_task(asyncio.to_thread(clob_trader.ensure_ready))
     await broadcast_state()
     return {"status": "ok"}
 

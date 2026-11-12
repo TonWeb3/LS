@@ -322,6 +322,9 @@
                                                   :class="Number(trade.live_profit_loss) > 0 ? 'text-green-400' : (Number(trade.live_profit_loss) < 0 ? 'text-red-400' : 'text-gray-400')"
                                                   x-text="formatUsd(trade.live_profit_loss)"></span>
                                             <span x-show="trade.live_profit_loss == null" class="text-gray-500">—</span>
+                                            <!-- PATCH: fill-and-kill copy — the fee counted in this result, or that the order found nothing at its price -->
+                                            <div x-show="trade.live_fee || trade.copy_status === 'FAK_MISSED'" class="text-[9px] font-normal text-gray-500 mt-0.5 whitespace-nowrap"
+                                                 x-text="trade.live_fee ? ('incl. fee $' + Number(trade.live_fee).toFixed(2)) : ('missed at ' + formatCents(trade.live_limit_price))"></div>
                                         </td>
                                         <td class="px-4 py-3 text-[10px] space-y-0.5 whitespace-nowrap">
                                             <div class="text-gray-300 font-mono">
@@ -582,6 +585,7 @@
                                   'paper_profit_loss', 'live_profit_loss', 'resolution',
                                   'paper_opened', 'live_opened', 'paper_closed', 'live_closed',
                                   'copy_status', 'redeem_status', 'polymarket_result', 'result_check'];   // PATCH: official results (two more)
+                    cols.push('live_fee', 'live_limit_price', 'live_order_usd', 'live_answer_ms');   // PATCH: fill-and-kill copy (four more, at the end)
                     const esc = (v) => {
                         if (v === null || v === undefined) return '';
                         const t = String(v);
@@ -610,7 +614,9 @@
                         (t.official && t.official.result) || ''    // PATCH: official results
                     ].map(esc).join(',');
 
-                    const csv = [cols.join(','), ...rows.map(line)].join(EOL) + EOL;
+                    // PATCH: fill-and-kill copy — the four columns added above, at the end of each row
+                    const fkLine = (t) => line(t) + ',' + [t.live_fee ?? '', t.live_limit_price ?? '', t.live_order_usd ?? '', t.live_answer_ms ?? ''].map(esc).join(',');
+                    const csv = [cols.join(','), ...rows.map(fkLine)].join(EOL) + EOL;
                     this.saveBlob(csv, 'text/csv', '15m-trades-', '.csv');
                 },
                 // Shared client-side file save: blob -> temporary <a download> -> revoke.

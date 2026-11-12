@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     COPY_RETRY_INTERVAL_MS: int = 300
     COPY_MAX_RETRIES: int = 5
     COPY_RESTING_TIMEOUT_S: float = 2.0
+    # PATCH: fill-and-kill copy — config.json "copy_fak"; bot/copy_fak.py has the defaults and the checks
+    COPY_FAK: Dict = {}
 
     # ── Live trading (Polymarket CLOB V2) ───────────────────────────────────────
     # The wallet is DERIVED from PRIVATE_KEY (hex key or 12/24-word seed phrase) and
@@ -170,6 +172,20 @@ def load_settings():
         try:
             with open(config_path, "r") as f:
                 config_data = json.load(f)
+
+            # PATCH: fill-and-kill copy — config.json "copy_fak", checked (defaults to winning FAK if omitted)
+            if "copy_fak" in config_data:
+                try:
+                    from bot import copy_fak as _copy_fak
+                    base_settings.COPY_FAK = _copy_fak.normalize(config_data["copy_fak"])
+                except Exception as e:
+                    print(f"Warning: Failed to load copy_fak config: {e}")
+            else:
+                try:
+                    from bot import copy_fak as _copy_fak
+                    base_settings.COPY_FAK = dict(_copy_fak.DEFAULTS)
+                except Exception:
+                    pass
 
             if "mode" in config_data: base_settings.MODE = config_data["mode"]
             if "paper_balance_usd" in config_data: base_settings.PAPER_BALANCE_USD = config_data["paper_balance_usd"]
