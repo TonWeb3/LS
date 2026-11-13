@@ -86,9 +86,28 @@
                         <p class="text-[10px] text-gray-500 mt-2 italic">Trades are skipped if top-of-book depth is below this.</p>
                     </div>
                     <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Regular Order Type (FAK / FOK)</label>
+                        <select x-model="form.copy_fak.order_type"
+                                @change="form.live.allow_partial_fill = (form.copy_fak.order_type === 'FAK')"
+                                class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                            <option value="FAK">FAK (Fill-And-Kill / Covers Fills with Retries)</option>
+                            <option value="FOK">FOK (Fill-Or-Kill / All-or-None Fill)</option>
+                        </select>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">FAK fills available size &amp; continuous retries cover the fill; FOK requires complete fill or retries without partials.</p>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Regular Cent Cap (¢)</label>
+                        <input type="number" step="0.5" min="0" max="50" x-model.number="form.copy_fak.cap_cents"
+                               @input="form.copy_fak.high_cap_cents = form.copy_fak.cap_cents; form.live.max_slippage = Number((form.copy_fak.cap_cents / 100).toFixed(4))"
+                               class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Cent cap buffer for regular orders (default 5¢). Limit = entry + this cap.</p>
+                    </div>
+                    <div>
                         <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Max Slippage ($)</label>
-                        <input type="number" step="any" min="0" max="0.50" x-model.number="form.live.max_slippage" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Live orders limit price = best_ask + slippage. Prevents bad fills.</p>
+                        <input type="number" step="any" min="0" max="0.50" x-model.number="form.live.max_slippage"
+                               @input="form.copy_fak.cap_cents = Number((form.live.max_slippage * 100).toFixed(1)); form.copy_fak.high_cap_cents = form.copy_fak.cap_cents"
+                               class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Live orders limit price = best_ask + slippage (e.g. 0.05 = 5¢ cap).</p>
                     </div>
                 </div>
             </div>
@@ -163,15 +182,15 @@
                         <div>
                             <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Final Minute Ask Range (Sniper)</label>
                             <div class="grid grid-cols-2 gap-2">
-                                <input type="number" step="0.001" min="0.001" max="0.10" x-model.number="form.longshot.bands.final.ask_min" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="Min (0.01)">
-                                <input type="number" step="0.001" min="0.001" max="0.10" x-model.number="form.longshot.bands.final.ask_max" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="Max (0.03)">
+                                <input type="number" step="0.001" min="0.001" max="0.10" x-model.number="form.longshot.bands.final.ask_min" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="Min (0.001)">
+                                <input type="number" step="0.001" min="0.001" max="0.10" x-model.number="form.longshot.bands.final.ask_max" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="Max (0.01)">
                             </div>
-                            <p class="text-[10px] text-gray-500 mt-2 italic">Triggers when market ask is within this sniper band (default 1¢–3¢).</p>
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Triggers when market ask is within this sniper band (default 0.1¢–1¢).</p>
                         </div>
                         <div>
                             <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Sniper Max Price Cap</label>
-                            <input type="number" step="0.001" min="0.01" max="0.20" x-model.number="form.longshot.bands.final.max_price" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="Cap (0.04)">
-                            <p class="text-[10px] text-gray-500 mt-2 italic">Absolute highest price to fill a longshot sniper trade.</p>
+                            <input type="number" step="0.001" min="0.001" max="0.20" x-model.number="form.longshot.bands.final.max_price" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="Cap (0.01)">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Absolute highest price to fill a longshot sniper trade (1¢ cap).</p>
                         </div>
                     </div>
 
@@ -434,6 +453,8 @@
             <div style="display: none;" aria-hidden="true">
                 <h2>Fill-and-Kill Copy</h2>
                 <input type="checkbox" x-model="form.copy_fak.enabled">
+                <input type="text" x-model="form.copy_fak.order_type">
+                <input type="checkbox" x-model="form.live.allow_partial_fill">
                 <input type="number" step="0.5" min="0" max="99" x-model.number="form.copy_fak.cap_cents">
                 <input type="number" step="0.01" min="0.01" max="1" x-model.number="form.copy_fak.high_from_price">
                 <input type="number" step="0.5" min="0" max="99" x-model.number="form.copy_fak.high_cap_cents">
@@ -689,29 +710,30 @@
                     polymarket: { series_id: '' },
                     trading: { symbol: 'BTCUSDT', risk_type: 'percent', risk_value: 10 },
                     ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0 },
-                    live: { relayer_api_key: '', alchemy_api_key: '', funder_address: '', max_slippage: 0.02 },
+                    live: { relayer_api_key: '', alchemy_api_key: '', funder_address: '', max_slippage: 0.05, allow_partial_fill: true },
                     flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 },
-                    copy_fak: { enabled: true, cap_cents: 0, high_cap_cents: 5, high_from_price: 0.55, stake_pct: 19, count_fee: true, fee_rate: 0.07 },
+                    copy_fak: { enabled: true, order_type: 'FAK', cap_cents: 5, high_cap_cents: 5, high_from_price: 0.55, stake_pct: 19, count_fee: true, fee_rate: 0.07, max_retries: 5, retry_interval_ms: 300 },
                     capital_extractor: { enabled: false, trigger_balance: 2000, withdraw_amount: 1000, withdraw_address: '', auto_resume_after_withdrawal: true, resume_after: 'submitted', default_destination: '' },
                     telegram: { enabled: false, bot_token: '' },
                     settlement: { redeem_after_resolution: false, confirm_official: false },
                     longshot: {
                         max_per_window: 1,
                         look_s: 60,
-                        follow: 'bet',
+                        cutoff_s: 0,
+                        follow: 'either',
                         sniper_stake_pct: 1,
                         maker_stake_pct: 1,
                         sniper_enabled: true,
                         maker_enabled: true,
-                        engine_enabled: false,
+                        engine_enabled: true,
                         engine_max_price: 0.10,
-                        engine_min_seconds_left: 2,
+                        engine_min_seconds_left: 0,
                         engine_cap_cents: 2,
                         engine_stake_pct: 0,
                         engine_own_slot: true,
                         maker: { price: 0.01 },
                         bands: {
-                            final: { ask_min: 0.01, ask_max: 0.03, max_price: 0.04 }
+                            final: { ask_min: 0.001, ask_max: 0.01, max_price: 0.01 }
                         }
                     }
                 },

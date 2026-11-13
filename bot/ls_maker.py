@@ -354,9 +354,11 @@ class MakerManager:
         if not (L.maker_on(full) and v and self.h.running() and now - float(v.get("ts") or 0) <= VIEW_MAX_AGE_S):
             return {}
         secs_left = float(v["end_ts"]) - now
-        maker_cutoff = float(mk.get("cutoff_s") or full.get("cutoff_s") or 3.0)
-        maker_look = float(mk.get("look_s") or full.get("look_s") or 60)
-        if not (maker_cutoff < secs_left <= maker_look):
+        c_val = mk.get("cutoff_s") if mk.get("cutoff_s") is not None else full.get("cutoff_s")
+        maker_cutoff = float(c_val) if c_val is not None else 0.0
+        l_val = mk.get("look_s") if mk.get("look_s") is not None else full.get("look_s")
+        maker_look = float(l_val) if l_val is not None else 60.0
+        if not (maker_cutoff <= secs_left <= maker_look):
             return {}
         start_ms = int(v["start_ms"])
         filled_sides = {b.side for b in self.bids.values() if b.start_ms == start_ms and b.filled > 1e-9}
@@ -453,9 +455,11 @@ class MakerManager:
         if v.get("sides") is not None and b.side not in v["sides"]:   # PATCH: longshot follow
             return f"not the side it follows ({v.get('follow_why') or 'follow'})"
         secs_left = float(v["end_ts"]) - now
-        maker_cutoff = float(mk.get("cutoff_s") or full.get("cutoff_s") or 3.0)
-        maker_look = float(mk.get("look_s") or full.get("look_s") or 60)
-        if secs_left <= maker_cutoff:
+        c_val = mk.get("cutoff_s") if mk.get("cutoff_s") is not None else full.get("cutoff_s")
+        maker_cutoff = float(c_val) if c_val is not None else 0.0
+        l_val = mk.get("look_s") if mk.get("look_s") is not None else full.get("look_s")
+        maker_look = float(l_val) if l_val is not None else 60.0
+        if secs_left < maker_cutoff:
             return f"cutoff, {secs_left:.1f}s left"
         if secs_left > maker_look:
             return "outside the look window"

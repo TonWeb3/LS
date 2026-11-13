@@ -1067,7 +1067,8 @@ async def _continuous_live_copy_fill(trade: Dict[str, Any], market: Dict[str, An
         try:
             await copy_fak.live_copy(trade, evaluated_price, settings=settings, state=state, trader=clob_trader,
                                      log=log_message, save=save_state, sync=_sync_active_trades_to_latest_data,
-                                     broadcast=broadcast_state, telegram=send_telegram, order_sent=order_sent)
+                                     broadcast=broadcast_state, telegram=send_telegram, order_sent=order_sent,
+                                     ws_client=polymarket_clob_ws)
         finally:
             if order_sent is not None:
                 order_sent.set()
@@ -1430,7 +1431,8 @@ def _le_kind(decision: Dict[str, Any], market_prices: Dict[str, Any], market: Di
     if not (0.0 < price <= float(cfg.get("engine_max_price", 0.10)) + 1e-9):
         return None
     end_ts = _le_end_ts(market or {})
-    if end_ts is not None and end_ts - time.time() < float(cfg.get("engine_min_seconds_left", 2.0)):
+    min_s = float(cfg.get("engine_min_seconds_left", 0.0) if cfg.get("engine_min_seconds_left") is not None else 0.0)
+    if end_ts is not None and (end_ts - time.time()) <= min_s:
         return "le_too_late"
     return "longshot"
 
@@ -1495,7 +1497,8 @@ def _le_final_ctx(ctx: Optional[Dict[str, Any]], now: float) -> Optional[Dict[st
     cfg = settings.LONGSHOT
     if not longshot.engine_on(cfg):
         return None
-    floor_s = float(cfg.get("engine_min_seconds_left", 2.0) or 0.0)
+    c_min = cfg.get("engine_min_seconds_left")
+    floor_s = float(c_min if c_min is not None else 0.0)
     if floor_s >= 5.0:
         return None
     use = ctx or _le_last_ctx
@@ -1593,7 +1596,9 @@ def _le_log_skip(market: Dict[str, Any], decision: Dict[str, Any], market_prices
     ask = (market_prices or {}).get("up" if side == "UP" else "down")
     end_ts = _le_end_ts(market)
     left = round(end_ts - time.time(), 1) if end_ts else None
-    why = {"le_too_late": f"under {float(settings.LONGSHOT.get('engine_min_seconds_left', 2.0)):g}s left",
+    c_min = settings.LONGSHOT.get("engine_min_seconds_left")
+    min_s = float(c_min if c_min is not None else 0.0)
+    why = {"le_too_late": f"window closed ({min_s:g}s left)" if min_s > 0 else "window closed",
            "le_slot_busy": "this window already has its long shot"}.get(reason, reason)
     log_message(f"LONGSHOT engine: {side} @ {ask} on {market.get('slug')} skipped ({why}; {left}s left)")
     _le_log("SKIP", market=market.get("slug"), side=side, seconds_left=left, model_prob=decision.get("prob"),
@@ -4255,6 +4260,41 @@ async def post_settings(new_settings: Dict[str, Any]):
         new_settings["copy_fak"] = _fk_new
 
     lv_in = new_settings.get("live") if isinstance(new_settings.get("live"), dict) else None
+    if _fk_new is not None and "order_type" in _fk_new:
+        settings.CLOB_ALLOW_PARTIAL_FILL = (_fk_new["order_type"] == "FAK")
+        if lv_in is not None:
+            lv_in["allow_partial_fill"] = settings.CLOB_ALLOW_PARTIAL_FILL
+    elif lv_in is not None and "allow_partial_fill" in lv_in:
+        ot = "FAK" if lv_in["allow_partial_fill"] else "FOK"
+        if _fk_new is None:
+            _fk_new = dict(copy_fak.merged(settings.COPY_FAK))
+        _fk_new["order_type"] = ot
+        new_settings["copy_fak"] = _fk_new
+        settings.CLOB_ALLOW_PARTIAL_FILL = bool(lv_in["allow_partial_fill"])
+
+    if lv_in is not None and "max_slippage" in lv_in:
+        try:
+            slip_val = float(lv_in["max_slippage"])
+            settings.CLOB_MAX_SLIPPAGE = slip_val
+            if _fk_new is None:
+                _fk_new = dict(copy_fak.merged(settings.COPY_FAK))
+            if "cap_cents" not in (new_settings.get("copy_fak") or {}):
+                _fk_new["cap_cents"] = round(slip_val * 100.0, 2)
+                _fk_new["high_cap_cents"] = round(slip_val * 100.0, 2)
+                new_settings["copy_fak"] = _fk_new
+        except Exception:
+            pass
+    if _fk_new is not None and "cap_cents" in _fk_new:
+        try:
+            cap_val = float(_fk_new["cap_cents"])
+            if lv_in is not None and "max_slippage" not in (new_settings.get("live") or {}):
+                lv_in["max_slippage"] = round(cap_val / 100.0, 4)
+                settings.CLOB_MAX_SLIPPAGE = lv_in["max_slippage"]
+            elif lv_in is None:
+                settings.CLOB_MAX_SLIPPAGE = round(cap_val / 100.0, 4)
+        except Exception:
+            pass
+
     _new_signer = None
     if lv_in is not None and "order_signer" in lv_in:
         from bot.config import normalize_order_signer

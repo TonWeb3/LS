@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # The wallet is DERIVED from PRIVATE_KEY (hex key or 12/24-word seed phrase) and
     # auto-detected: deposit-wallet (V2, signature_type 3) first, then legacy proxy /
     # safe — whichever actually holds pUSD. Nothing to pick by hand.
-    CLOB_MAX_SLIPPAGE: float = 0.02  # marketable-limit buffer above the quote (probability units, 2¢)
+    CLOB_MAX_SLIPPAGE: float = 0.05  # marketable-limit buffer above the quote (probability units, 5¢)
     EXIT_MAX_RETRIES: int = 5
     FUNDER_ADDRESS: str = ""         # optional explicit deposit/funder wallet override (bypasses guessing)
     ORDER_SIGNER: str = "auto"       # order signer mode: auto, wallet, or eoa

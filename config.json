@@ -6,7 +6,7 @@
     "resting_timeout_s": 2.0
   },
   "live": {
-    "max_slippage": 0.02,
+    "max_slippage": 0.05,
     "exit_max_retries": 5,
     "allow_partial_fill": true,
     "funder_address": ""
@@ -60,10 +60,13 @@
   },
   "copy_fak": {
     "enabled": true,
-    "cap_cents": 0.0,
+    "order_type": "FAK",
+    "cap_cents": 5.0,
     "high_cap_cents": 5.0,
     "high_from_price": 0.55,
     "stake_pct": 19.0,
+    "max_retries": 5,
+    "retry_interval_ms": 300,
     "count_fee": true,
     "fee_rate": 0.07
   },
@@ -87,9 +90,9 @@
     },
     "bands": {
       "final": {
-        "ask_min": 0.01,
-        "ask_max": 0.03,
-        "max_price": 0.04
+        "ask_min": 0.001,
+        "ask_max": 0.01,
+        "max_price": 0.01
       }
     },
     "follow": "either",
@@ -99,7 +102,7 @@
     "maker_enabled": true,
     "engine_enabled": true,
     "engine_max_price": 0.1,
-    "engine_min_seconds_left": 2.0,
+    "engine_min_seconds_left": 0.0,
     "engine_cap_cents": 2.0,
     "engine_stake_pct": 0,
     "engine_own_slot": true

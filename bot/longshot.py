@@ -29,15 +29,15 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 DEFAULTS: Dict[str, Any] = {
     "max_per_window": 1,       # long-shot trades per 15m window
     "look_s": 60,              # final minute look window in seconds
-    "cutoff_s": 3.0,           # no new long shots in the last N seconds
-    "follow": "bet",           # PATCH: longshot follow — "bet", "prediction", "either" or "off" (see FOLLOW_MODES)
+    "cutoff_s": 0.0,           # no new long shots in the last N seconds (0 = until close)
+    "follow": "either",        # PATCH: longshot follow — "bet", "prediction", "either" or "off" (see FOLLOW_MODES)
     "sniper_stake_pct": 1.0,   # PATCH: longshot stake — % of the balance per sniper buy; 0 = the GTD stake
     "maker_stake_pct": 1.0,    # PATCH: longshot stake — % of the balance per maker bid; 0 = the GTD stake
     "sniper_enabled": True,    # PATCH: longshot strategies — the final-minute sniper buys on/off
     "maker_enabled": True,     # PATCH: longshot strategies — the resting maker bids on/off
-    "engine_enabled": False,   # PATCH: longshot engine — the GTD engine's own cheap entries as long shots (the paper bot's kind)
+    "engine_enabled": True,    # PATCH: longshot engine — the GTD engine's own cheap entries as long shots (the paper bot's kind)
     "engine_max_price": 0.10,  # PATCH: longshot engine — a GTD entry at this ask or less is a long shot
-    "engine_min_seconds_left": 2.0,   # PATCH: longshot engine — none with less time left (the paper bot's latest: 2.1 s)
+    "engine_min_seconds_left": 0.0,   # PATCH: longshot engine — none with less time left (0.0 = until close)
     "engine_cap_cents": 2.0,   # PATCH: longshot engine — the live order: one fill-and-kill at the paper entry + this
     "engine_stake_pct": 0.0,   # PATCH: longshot engine — % of the balance per engine long shot; 0 = the GTD stake
     "engine_own_slot": True,   # PATCH: longshot engine — next to the window's regular trade; False = only with no open position (as TOG)
@@ -46,14 +46,14 @@ DEFAULTS: Dict[str, Any] = {
     },
     "bands": {
         "final": {
-            "ask_min": 0.01,
-            "ask_max": 0.03,
-            "max_price": 0.04,
+            "ask_min": 0.001,
+            "ask_max": 0.01,
+            "max_price": 0.01,
         },
     },
 }
 
-BAND_TEMPLATE = {"ask_min": 0.01, "ask_max": 0.03, "max_price": 0.04}
+BAND_TEMPLATE = {"ask_min": 0.001, "ask_max": 0.01, "max_price": 0.01}
 
 MAKER_DEFAULTS = DEFAULTS["maker"]
 
@@ -165,7 +165,7 @@ def describe(cfg: Dict[str, Any]) -> str:
     parts = []
     for name, b in (cfg.get("bands") or {}).items():
         if b.get("enabled", True):
-            parts.append(f"{name} {float(b.get('ask_min', 0.01))*100:g}–{float(b.get('ask_max', 0.03))*100:g}¢ (cap {float(b.get('max_price', 0.04))*100:g}¢)")
+            parts.append(f"{name} {float(b.get('ask_min', 0.001))*100:g}–{float(b.get('ask_max', 0.01))*100:g}¢ (cap {float(b.get('max_price', 0.01))*100:g}¢)")
     mk = cfg.get("maker") or {}
     maker_str = f" | maker {float(mk.get('price', 0.01))*100:g}¢ bid" if maker_on(cfg) else " | maker bids off"
     if not sniper_on(cfg):                            # PATCH: longshot strategies
@@ -206,14 +206,16 @@ def engine_on(cfg: Dict[str, Any]) -> bool:
 
 
 def engine_text(cfg: Dict[str, Any]) -> str:
-    """The status line's engine part: " | engine long shots ≤10¢ (live +2¢, to 2s, GTD stake, own slot)" or off."""
+    """The status line's engine part: " | engine long shots ≤10¢ (live +2¢, until close, GTD stake, own slot)" or off."""
     if not engine_on(cfg):
         return " | engine long shots off"
     pct = stake_pct(cfg, "engine_stake_pct")
     stake = f"{pct:g}% balance" if pct > 0 else f"GTD stake ({gtd_stake_text()})"
     slot = "own slot" if cfg.get("engine_own_slot", True) else "one position per window"
+    min_s = float(cfg.get("engine_min_seconds_left", 0.0) or 0.0)
+    to_str = f"to {min_s:g}s" if min_s > 0 else "until close"
     return (f" | engine long shots ≤{float(cfg.get('engine_max_price', 0.10)) * 100:g}¢ "
-            f"(live +{float(cfg.get('engine_cap_cents', 2.0)):g}¢, to {float(cfg.get('engine_min_seconds_left', 2.0)):g}s, {stake}, {slot})")
+            f"(live +{float(cfg.get('engine_cap_cents', 2.0)):g}¢, {to_str}, {stake}, {slot})")
 
 
 def engine_stake_for(balance: float, cfg: Optional[Dict[str, Any]] = None) -> float:
@@ -257,7 +259,8 @@ def eval_look_s(cfg: Dict[str, Any]) -> float:
 
 
 def eval_cutoff_s(cfg: Dict[str, Any]) -> float:
-    return float(cfg.get("cutoff_s", 3.0))
+    c = (cfg or {}).get("cutoff_s")
+    return float(c if c is not None else 0.0)
 
 
 def max_band_ask(cfg: Dict[str, Any]) -> float:
@@ -408,7 +411,8 @@ def decide(p_up: float, books: Dict[str, Dict[str, Optional[float]]], secs_left:
     sides: the sides it may take, None = both (PATCH: longshot follow)."""
     if not sniper_on(cfg):                            # PATCH: longshot strategies — the sniper is switched off
         return {"action": "NO_TRADE", "reason": "longshot_sniper_off"}
-    cutoff = float(cfg.get("cutoff_s", 3.0))
+    c = (cfg or {}).get("cutoff_s")
+    cutoff = float(c if c is not None else 0.0)
     if secs_left < cutoff:
         return {"action": "NO_TRADE", "reason": "longshot_past_cutoff"}
     best, reasons, skipped = None, [], []

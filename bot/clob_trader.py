@@ -820,6 +820,115 @@ class ClobTrader:
             data["rust_total_us"] = res.get("total_time_us")
         return data
 
+    def _market_order(self, token_id, amount, side: str, price, order_type=None) -> Dict[str, Any]:
+        from polymarket_apis.types.clob_types import OrderType
+        from polymarket_apis.utilities.order_builder.builder import ROUNDING_CONFIG
+        ot = order_type if order_type is not None else OrderType.FAK
+        order_amount = max(1.00, round(float(amount), 2)) if side == "BUY" else round(float(amount), 4)
+        order_price = round(float(price), 4) if price else 0
+        self.warm_token(token_id)
+
+        if order_price <= 0:
+            order_price = round(
+                float(self.clob.calculate_market_price(str(token_id), side, order_amount, ot)),
+                4,
+            )
+        # Polymarket rule: taker amount for BUY must be at least 5 shares
+        if side == "BUY" and order_price > 0:
+            import math
+            min_usd = round(max(1.00, math.ceil(5.0 * order_price * 100.0) / 100.0), 2)
+            if order_amount < min_usd:
+                order_amount = min_usd
+        side_int, maker_amt, taker_amt = self.clob.builder.get_market_order_amounts(
+            side, order_amount, order_price, ROUNDING_CONFIG["0.01"]
+        )
+        ot_str = str(ot.value if hasattr(ot, "value") else ot)
+        data = self._post_order_fast(
+            token_id=str(token_id),
+            maker_amount=maker_amt,
+            taker_amount=taker_amt,
+            side_int=side_int,
+            order_type_str=ot_str,
+            expiration_str="0",
+            neg_risk=False,
+        )
+        order_id = (data.get("order_id") or data.get("orderID")
+                    or data.get("orderId") or data.get("id"))
+        status = str(data.get("status", "")).lower()
+        err = data.get("error_msg") or data.get("errorMsg")
+
+        making = _to_float(data.get("making_amount") or data.get("makingAmount"))
+        taking = _to_float(data.get("taking_amount") or data.get("takingAmount"))
+
+        if side == "BUY":
+            usd, shares = making, taking
+        else:
+            shares, usd = making, taking
+
+        filled = (data.get("success") is not False
+                  and (status in self._FILLED_STATUSES or status in ("matched", "delayed", "filled", "closed"))
+                  and shares is not None and shares > 0
+                  and usd is not None and usd > 0)
+
+        if not filled:
+            if order_id and status in ("delayed", "open"):
+                fills = self.get_order_fills(str(order_id), str(token_id))
+                if fills:
+                    total_shares = sum(float(f["size"]) for f in fills)
+                    total_usd = sum(float(f["size"]) * float(f["price"]) for f in fills)
+                    return {
+                        "ok": True, "response": data, "order_id": order_id, "status": "filled",
+                        "fill_price": (total_usd / total_shares) if total_shares else None,
+                        "fill_size": total_shares,
+                        "fill_usd": total_usd,
+                    }
+                try:
+                    self.cancel_order(str(order_id))
+                except Exception:
+                    pass
+
+            return {"ok": False, "response": data, "order_id": order_id,
+                    "status": status,
+                    "error": err or f"not_filled(status={status or 'unknown'})"}
+
+        return {
+            "ok": True, "response": data, "order_id": order_id, "status": status,
+            "fill_price": (usd / shares) if shares else None,
+            "fill_size": shares,
+            "fill_usd": usd,
+        }
+
+    def place_market_buy(self, token_id: str, usdc_amount: float, price: Optional[float] = None, slippage: Optional[float] = None, order_type: Optional[Any] = None) -> Dict[str, Any]:
+        """Marketable BUY for `usdc_amount` USDC of `token_id`. `price`
+        is the current quote; the limit is quote + slippage buffer (capped < $1).
+        Supports FAK (Fill-And-Kill) and FOK (Fill-Or-Kill)."""
+        if not token_id:
+            return {"ok": False, "error": "missing_token_id"}
+        if not self.ensure_ready():
+            return {"ok": False, "error": self.last_error or "client_not_ready"}
+        if not self._approvals_done and settings.RELAYER_API_KEY:
+            try:
+                self.ensure_setup()
+            except Exception:
+                pass
+        try:
+            from polymarket_apis.types.clob_types import OrderType
+            slip = slippage if slippage is not None else settings.CLOB_MAX_SLIPPAGE
+            limit = min(0.99, float(price) + slip) if price and price > 0 else 0
+            cfg_fak = getattr(settings, "COPY_FAK", {}) or {}
+            cfg_ot = str(cfg_fak.get("order_type") or "").upper() if isinstance(cfg_fak, dict) else ""
+            default_ot = OrderType.FAK if getattr(settings, "CLOB_ALLOW_PARTIAL_FILL", True) else OrderType.FOK
+            if order_type is not None:
+                ot_str = str(getattr(order_type, "value", order_type)).upper()
+                ot = OrderType.FOK if "FOK" in ot_str else OrderType.FAK
+            elif cfg_ot:
+                ot = OrderType.FOK if "FOK" in cfg_ot else OrderType.FAK
+            else:
+                ot = default_ot
+            return self._market_order(token_id, usdc_amount, "BUY", limit, order_type=ot)
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     def place_limit_buy(self, token_id: str, size: float, price: float, expiration: Optional[int] = None,
                         tick_size: str = "0.01", order_type: str = "GTD", post_only: bool = False) -> Dict[str, Any]:
         """Place a Good 'Til Date (GTD) limit BUY order for `size` shares at `price`.
