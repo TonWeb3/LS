@@ -27,9 +27,22 @@
 <body class="bg-gray-900 text-white min-h-screen p-4 sm:p-8" x-data="assistantData()" x-cloak>
     <div class="max-w-6xl mx-auto">
         <header class="flex flex-col sm:flex-row justify-between items-center mb-6 sm:mb-8 gap-4">
-            <div class="flex items-center gap-2 sm:gap-3">
-                <h1 class="text-2xl sm:text-3xl font-bold text-blue-400" x-text="(data.trading_state?.symbol || 'BTC') + ' 15m Assistant'"></h1>
+            <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
+                <h1 class="text-2xl sm:text-3xl font-bold text-blue-400" x-text="(data.trading_state?.symbol || 'BTC') + ' ' + (viewTimeframe || data.trading_state?.candle_window_minutes || 15) + 'm Assistant'"></h1>
                 <span class="bg-indigo-900/80 text-indigo-300 border border-indigo-500/50 px-2 sm:px-2.5 py-0.5 rounded font-mono text-xs font-black tracking-wider" title="Strictly Good 'Til Date (GTD) execution mode">GTD</span>
+                <!-- Timeframe Selector -->
+                <div class="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700 shadow-sm ml-1">
+                    <button type="button" @click="setViewTimeframe(15)"
+                            :class="(viewTimeframe || data.trading_state?.candle_window_minutes || 15) === 15 ? 'bg-blue-600 text-white font-bold shadow' : 'text-gray-400 hover:text-white'"
+                            class="px-2.5 py-0.5 rounded text-xs transition cursor-pointer">
+                        15M
+                    </button>
+                    <button type="button" @click="setViewTimeframe(5)"
+                            :class="(viewTimeframe || data.trading_state?.candle_window_minutes || 15) === 5 ? 'bg-blue-600 text-white font-bold shadow' : 'text-gray-400 hover:text-white'"
+                            class="px-2.5 py-0.5 rounded text-xs transition cursor-pointer">
+                        5M
+                    </button>
+                </div>
             </div>
             <div class="flex space-x-2 sm:space-x-4 items-center">
                 <div class="flex items-center space-x-2 text-[10px] sm:text-xs mr-2 sm:mr-4">
@@ -44,6 +57,11 @@
                     <div class="flex items-center" :title="'Order book source: ' + (data.prices?.book_source || 'unknown') + ' (amber = fell back to REST polling)'">
                         <div :class="data.prices?.book_source === 'ws' ? 'bg-green-500' : (data.prices?.book_source ? 'bg-amber-500' : 'bg-red-500')" class="w-2 h-2 rounded-full mr-1"></div>
                         <span class="text-gray-400">Book WS</span>
+                    </div>
+                    <!-- PATCH: price stream — shown while the stream is switched on; green = both numbers are fresh -->
+                    <div class="flex items-center" x-show="data.prices?.price_stream" :title="'Polymarket price stream: ' + (data.prices?.price_stream?.status || '-') + (data.prices?.price_stream?.average != null ? ', 60-second average ' + Number(data.prices.price_stream.average).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '')">
+                        <div :class="data.prices?.price_stream?.fresh ? 'bg-green-500' : 'bg-amber-500'" class="w-2 h-2 rounded-full mr-1"></div>
+                        <span class="text-gray-400">Price stream</span>
                     </div>
                 </div>
                 <!-- Start / Stop trading -->
@@ -104,15 +122,15 @@
             <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg border-l-4 border-amber-500">
                 <p class="text-gray-400 text-xs sm:text-sm uppercase">Price to Beat (Open)</p>
                 <h2 class="text-2xl sm:text-3xl font-mono"
-                    :class="data.prices?.window_open ? 'text-amber-400' : 'text-gray-600'"
-                    x-text="data.prices?.window_open != null ? ('$' + Number(data.prices.window_open).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})) : 'NOT MARKED'"></h2>
+                    :class="vPrices.window_open ? 'text-amber-400' : 'text-gray-600'"
+                    x-text="vPrices.window_open != null ? ('$' + Number(vPrices.window_open).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})) : 'NOT MARKED'"></h2>
                 <p class="text-[10px] mt-1 uppercase tracking-tighter"
-                   :class="data.prices?.window_open ? 'text-gray-500' : 'text-red-400'"
-                   x-text="data.prices?.window_open ? ('Chainlink @ eventStartTime') : 'No strike — trading skipped this window'"></p>
+                   :class="vPrices.window_open ? 'text-gray-500' : 'text-red-400'"
+                   x-text="vPrices.window_open ? ('Chainlink @ eventStartTime' + (vPrices.window_open_source ? ' (' + vPrices.window_open_source + ')' : '')) : 'No strike — trading skipped this window'"></p>
             </div>
             <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg border-l-4 border-purple-500 sm:col-span-2 lg:col-span-1">
-                <p class="text-gray-400 text-xs sm:text-sm uppercase" x-text="'Time Remaining (' + (data.analysis?.decision?.phase || '-') + ')'"></p>
-                <h2 class="text-2xl sm:text-3xl font-mono" x-text="formatTime(data.timing?.remainingMinutes)"></h2>
+                <p class="text-gray-400 text-xs sm:text-sm uppercase" x-text="'Time Remaining (' + (vAnalysis.decision?.phase || '-') + ')'"></p>
+                <h2 class="text-2xl sm:text-3xl font-mono" x-text="formatTime(vTiming.remainingMinutes)"></h2>
             </div>
         </div>
 
@@ -121,17 +139,17 @@
             <p class="text-gray-400 uppercase tracking-widest mb-4 text-xs sm:text-sm">Current Prediction</p>
             <div class="flex flex-col sm:flex-row justify-center items-center space-y-4 sm:space-y-0 sm:space-x-12">
                 <div class="text-center order-2 sm:order-1">
-                    <p class="text-green-400 text-2xl sm:text-4xl font-bold" x-text="data.analysis?.probability?.adjustedUp != null ? (data.analysis.probability.adjustedUp * 100).toFixed(1) + '%' : '--'"></p>
+                    <p class="text-green-400 text-2xl sm:text-4xl font-bold" x-text="vAnalysis.probability?.adjustedUp != null ? (vAnalysis.probability.adjustedUp * 100).toFixed(1) + '%' : '--'"></p>
                     <p class="text-[10px] sm:text-xs text-gray-500">PROB UP</p>
                 </div>
                 <div class="text-center order-1 sm:order-2">
-                    <div class="text-3xl sm:text-5xl font-black mb-1 sm:mb-2" :class="data.analysis?.decision?.action === 'ENTER' ? (data.analysis?.decision?.side === 'UP' ? 'text-green-500' : 'text-red-500') : 'text-gray-600'">
-                        <span x-text="data.analysis?.probability?.adjustedUp != null ? (data.analysis?.decision?.action === 'ENTER' ? (data.analysis?.decision?.side === 'UP' ? 'BUY UP ↑' : 'BUY DOWN ↓') : 'NO TRADE') : '--'"></span>
+                    <div class="text-3xl sm:text-5xl font-black mb-1 sm:mb-2" :class="vAnalysis.decision?.action === 'ENTER' ? (vAnalysis.decision?.side === 'UP' ? 'text-green-500' : 'text-red-500') : 'text-gray-600'">
+                        <span x-text="vAnalysis.probability?.adjustedUp != null ? (vAnalysis.decision?.action === 'ENTER' ? (vAnalysis.decision?.side === 'UP' ? 'BUY UP ↑' : 'BUY DOWN ↓') : 'NO TRADE') : '--'"></span>
                     </div>
-                    <p class="text-[10px] sm:text-xs uppercase text-gray-400 font-bold" x-text="data.analysis?.probability?.adjustedUp != null ? (data.analysis?.decision?.reason || '') : 'MISSING DATA'"></p>
+                    <p class="text-[10px] sm:text-xs uppercase text-gray-400 font-bold" x-text="vAnalysis.probability?.adjustedUp != null ? (vAnalysis.decision?.reason || '') : 'MISSING DATA'"></p>
                 </div>
                 <div class="text-center order-3">
-                    <p class="text-red-400 text-2xl sm:text-4xl font-bold" x-text="data.analysis?.probability?.adjustedDown != null ? (data.analysis.probability.adjustedDown * 100).toFixed(1) + '%' : '--'"></p>
+                    <p class="text-red-400 text-2xl sm:text-4xl font-bold" x-text="vAnalysis.probability?.adjustedDown != null ? (vAnalysis.probability.adjustedDown * 100).toFixed(1) + '%' : '--'"></p>
                     <p class="text-[10px] sm:text-xs text-gray-500">PROB DOWN</p>
                 </div>
             </div>
@@ -157,12 +175,12 @@
                               x-text="data.indicators?.heiken_5m?.color ? (data.indicators.heiken_5m.color + ' x' + data.indicators.heiken_5m.count) : '--'"></span>
                     </div>
                     <div class="flex justify-between text-sm sm:text-base">
-                        <span class="text-gray-400">Fair Probability (15m Close)</span>
+                        <span class="text-gray-400" x-text="'Fair Probability (' + (viewTimeframe || data.trading_state?.candle_window_minutes || 15) + 'm Close)'"></span>
                         <div class="flex flex-col items-end">
-                            <span :class="data.indicators?.fair?.bias === 'BULLISH' ? 'text-green-400' : (data.indicators?.fair?.bias === 'BEARISH' ? 'text-red-400' : 'text-gray-400')"
-                                  x-text="data.indicators?.fair?.prob_up != null ? ((data.indicators.fair.prob_up * 100).toFixed(1) + '% UP') : '--'"></span>
-                            <span :class="data.indicators?.fair?.bias === 'BEARISH' ? 'text-green-400' : (data.indicators?.fair?.bias === 'BULLISH' ? 'text-red-400' : 'text-gray-400')"
-                                  x-text="data.indicators?.fair?.prob_down != null ? ((data.indicators.fair.prob_down * 100).toFixed(1) + '% DOWN') : ''" class="text-[10px]"></span>
+                            <span :class="vIndicators.fair?.bias === 'BULLISH' ? 'text-green-400' : (vIndicators.fair?.bias === 'BEARISH' ? 'text-red-400' : 'text-gray-400')"
+                                  x-text="vIndicators.fair?.prob_up != null ? ((vIndicators.fair.prob_up * 100).toFixed(1) + '% UP') : '--'"></span>
+                            <span :class="vIndicators.fair?.bias === 'BEARISH' ? 'text-green-400' : (vIndicators.fair?.bias === 'BULLISH' ? 'text-red-400' : 'text-gray-400')"
+                                  x-text="vIndicators.fair?.prob_down != null ? ((vIndicators.fair.prob_down * 100).toFixed(1) + '% DOWN') : ''" class="text-[10px]"></span>
                         </div>
                     </div>
                 </div>
@@ -173,16 +191,16 @@
                 <div class="space-y-4">
                     <div class="flex justify-between items-center text-sm sm:text-base">
                         <span class="text-green-400 font-bold uppercase">Up (YES)</span>
-                        <span class="text-xl sm:text-2xl font-mono text-green-400" x-text="data.prices?.poly_up ? (data.prices.poly_up * 100).toFixed(0) + '¢' : '-'"></span>
+                        <span class="text-xl sm:text-2xl font-mono text-green-400" x-text="vPrices.poly_up ? (vPrices.poly_up * 100).toFixed(0) + '¢' : '-'"></span>
                     </div>
                     <div class="flex justify-between items-center text-sm sm:text-base">
                         <span class="text-red-400 font-bold uppercase">Down (NO)</span>
-                        <span class="text-xl sm:text-2xl font-mono text-red-400" x-text="data.prices?.poly_down ? (data.prices.poly_down * 100).toFixed(0) + '¢' : '-'"></span>
+                        <span class="text-xl sm:text-2xl font-mono text-red-400" x-text="vPrices.poly_down ? (vPrices.poly_down * 100).toFixed(0) + '¢' : '-'"></span>
                     </div>
                     <div class="flex justify-between border-t border-gray-700 pt-2 text-sm sm:text-base">
                         <span class="text-gray-400">Model Edge (UP)</span>
-                        <span :class="data.analysis?.edge?.edgeUp > 0 ? 'text-green-400' : (data.analysis?.edge?.edgeUp < 0 ? 'text-red-400' : 'text-gray-500')"
-                              x-text="data.analysis?.edge?.edgeUp != null ? (data.analysis.edge.edgeUp * 100).toFixed(1) + '%' : '--'"></span>
+                        <span :class="vAnalysis.edge?.edgeUp > 0 ? 'text-green-400' : (vAnalysis.edge?.edgeUp < 0 ? 'text-red-400' : 'text-gray-500')"
+                              x-text="vAnalysis.edge?.edgeUp != null ? (vAnalysis.edge.edgeUp * 100).toFixed(1) + '%' : '--'"></span>
                     </div>
                 </div>
             </div>
@@ -523,6 +541,34 @@
                     catch (e) { this.running = true; }
                     this.suppressSyncUntil = Date.now() + 3000; this.botBusy = false;
                 },
+                viewTimeframe: localStorage.getItem('view_tf') ? parseInt(localStorage.getItem('view_tf')) : null,
+                setViewTimeframe(tf) {
+                    this.viewTimeframe = tf;
+                    try { localStorage.setItem('view_tf', String(tf)); } catch (e) {}
+                },
+                switchTimeframe(tf) {
+                    this.setViewTimeframe(tf);
+                },
+                getViewData() {
+                    const currentTradingTf = this.data.trading_state?.candle_window_minutes || 15;
+                    const targetTf = String(this.viewTimeframe || currentTradingTf);
+                    if (this.data.tf_data && this.data.tf_data[targetTf]) {
+                        return this.data.tf_data[targetTf];
+                    }
+                    return {
+                        timing: this.data.timing || {},
+                        prices: this.data.prices || {},
+                        indicators: this.data.indicators || {},
+                        analysis: this.data.analysis || {},
+                        market: this.data.market || null,
+                        is_trading: (parseInt(targetTf) === currentTradingTf)
+                    };
+                },
+                get vTiming() { return this.getViewData().timing || {}; },
+                get vPrices() { return this.getViewData().prices || {}; },
+                get vAnalysis() { return this.getViewData().analysis || {}; },
+                get vIndicators() { return this.getViewData().indicators || this.data.indicators || {}; },
+                get vMarket() { return this.getViewData().market; },
                 // Data files (signals.csv etc). The server exposes a fixed whitelist and
                 // streams the file; we only need to know what exists and how big it is.
                 async loadFiles() {
@@ -544,7 +590,7 @@
                         lines = (this.logs || []).slice().reverse();   // fall back to what is shown
                     }
                     if (!lines || !lines.length) return;
-                    this.saveBlob(lines.join(EOL) + EOL, 'text/plain', '15m-console-', '.log');
+                    this.saveBlob(lines.join(EOL) + EOL, 'text/plain', (this.data?.trading_state?.candle_window_minutes || 15) + 'm-console-', '.log');
                 },
                 // Export ALL closed trades to CSV (fetched fresh so it is not limited to
                 // what is currently rendered).
@@ -617,7 +663,7 @@
                     // PATCH: fill-and-kill copy — the four columns added above, at the end of each row
                     const fkLine = (t) => line(t) + ',' + [t.live_fee ?? '', t.live_limit_price ?? '', t.live_order_usd ?? '', t.live_answer_ms ?? ''].map(esc).join(',');
                     const csv = [cols.join(','), ...rows.map(fkLine)].join(EOL) + EOL;
-                    this.saveBlob(csv, 'text/csv', '15m-trades-', '.csv');
+                    this.saveBlob(csv, 'text/csv', (this.data?.trading_state?.candle_window_minutes || 15) + 'm-trades-', '.csv');
                 },
                 // Shared client-side file save: blob -> temporary <a download> -> revoke.
                 saveBlob(text, mime, prefix, ext) {

@@ -31,14 +31,19 @@ DEFAULTS: Dict[str, Any] = {
     "look_s": 60,              # final minute look window in seconds
     "cutoff_s": 0.0,           # no new long shots in the last N seconds (0 = until close)
     "follow": "either",        # PATCH: longshot follow — "bet", "prediction", "either" or "off" (see FOLLOW_MODES)
+    "order_type": "FAK",       # PATCH: longshot order type — "FAK", "FOK", "GTD" or "GTC"
     "sniper_stake_pct": 1.0,   # PATCH: longshot stake — % of the balance per sniper buy; 0 = the GTD stake
     "maker_stake_pct": 1.0,    # PATCH: longshot stake — % of the balance per maker bid; 0 = the GTD stake
+    "sniper_min_chance": 0.0,  # PATCH: sniper minimum chance — no sniper buy while the model's chance for that side is under this (0.05 = 5%); 0 = no test
+    "sniper_min_multiple": 0.0,  # PATCH: sniper minimum chance — ...or while chance ÷ price is under this (1 = never pay more than the chance); 0 = no test
+    "one_at_a_time": False,    # only allow one longshot strategy to open per window (first to trigger locks the window)
     "sniper_enabled": True,    # PATCH: longshot strategies — the final-minute sniper buys on/off
     "maker_enabled": True,     # PATCH: longshot strategies — the resting maker bids on/off
     "engine_enabled": True,    # PATCH: longshot engine — the GTD engine's own cheap entries as long shots (the paper bot's kind)
     "engine_max_price": 0.10,  # PATCH: longshot engine — a GTD entry at this ask or less is a long shot
     "engine_min_seconds_left": 0.0,   # PATCH: longshot engine — none with less time left (0.0 = until close)
     "engine_cap_cents": 2.0,   # PATCH: longshot engine — the live order: one fill-and-kill at the paper entry + this
+    "engine_resends": 0,       # PATCH: engine re-sends — a missed or part-filled engine order goes out again (same price, what's unfilled) when the ask is back at it or under, this many times; 0 = sent once
     "engine_stake_pct": 0.0,   # PATCH: longshot engine — % of the balance per engine long shot; 0 = the GTD stake
     "engine_own_slot": True,   # PATCH: longshot engine — next to the window's regular trade; False = only with no open position (as TOG)
     "maker": {
@@ -57,7 +62,7 @@ BAND_TEMPLATE = {"ask_min": 0.001, "ask_max": 0.01, "max_price": 0.01}
 
 MAKER_DEFAULTS = DEFAULTS["maker"]
 
-ORDER_TYPES = ("GTD",)
+ORDER_TYPES = ("FAK", "FOK", "GTD", "GTC")
 
 # PATCH: longshot follow — which side a long shot (sniper buy or maker bid) may take:
 #   "bet"        the side of the window's first regular GTD trade; no long shot without one
@@ -117,7 +122,11 @@ def normalize(user_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     num(cfg, "max_per_window", "max per window", 0, 100, as_int=True)
     num(cfg, "look_s", "look window", 1, 900)
-    cfg["order_type"] = "GTD"
+    ot = str(cfg.get("order_type") or "FAK").strip().upper()
+    if ot in ORDER_TYPES:
+        cfg["order_type"] = ot
+    else:
+        errs.append('order_type must be "FAK", "FOK", "GTD" or "GTC"')
     follow = str(cfg.get("follow") or "bet").strip().lower()      # PATCH: longshot follow
     if follow in FOLLOW_MODES:
         cfg["follow"] = follow
@@ -125,12 +134,16 @@ def normalize(user_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         errs.append('follow must be "bet", "prediction", "either" or "off"')
     num(cfg, "sniper_stake_pct", "sniper stake %", 0, 100)      # PATCH: longshot stake
     num(cfg, "maker_stake_pct", "maker stake %", 0, 100)
+    num(cfg, "sniper_min_chance", "sniper minimum chance", 0, 1)              # PATCH: sniper minimum chance
+    num(cfg, "sniper_min_multiple", "sniper minimum chance ÷ price", 0, 1000)
     num(cfg, "engine_max_price", "engine long shots max price", 0.001, 0.99)   # PATCH: longshot engine
     num(cfg, "engine_min_seconds_left", "engine long shots min seconds left", 0, 900)
     num(cfg, "engine_cap_cents", "engine long shots live cap (cents)", 0, 99)
+    num(cfg, "engine_resends", "engine long shots re-sends", 0, 50, as_int=True)   # PATCH: engine re-sends
     num(cfg, "engine_stake_pct", "engine long shots stake %", 0, 100)
     for key, label in (("sniper_enabled", "sniper"), ("maker_enabled", "maker bids"),
-                       ("engine_enabled", "engine long shots"), ("engine_own_slot", "engine long shots own slot")):   # PATCH: longshot strategies (+ PATCH: longshot engine)
+                       ("engine_enabled", "engine long shots"), ("engine_own_slot", "engine long shots own slot"),
+                       ("one_at_a_time", "one long shot at a time")):   # PATCH: longshot strategies (+ PATCH: longshot engine + exclusive mode)
         v = cfg.get(key, True)
         if isinstance(v, str):
             v = {"true": True, "on": True, "yes": True, "1": True,
@@ -160,19 +173,28 @@ def normalize(user_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return cfg
 
 
+def one_at_a_time_on(cfg: Optional[Dict[str, Any]]) -> bool:
+    """True when exclusive single-longshot mode is enabled: only one longshot strategy can enter per window."""
+    return bool((cfg or {}).get("one_at_a_time", False))
+
+
 def describe(cfg: Dict[str, Any]) -> str:
     """One log line with the active settings."""
     parts = []
     for name, b in (cfg.get("bands") or {}).items():
         if b.get("enabled", True):
             parts.append(f"{name} {float(b.get('ask_min', 0.001))*100:g}–{float(b.get('ask_max', 0.01))*100:g}¢ (cap {float(b.get('max_price', 0.01))*100:g}¢)")
+    if parts:                                         # PATCH: sniper minimum chance
+        parts[-1] += sniper_min_text(cfg)
     mk = cfg.get("maker") or {}
     maker_str = f" | maker {float(mk.get('price', 0.01))*100:g}¢ bid" if maker_on(cfg) else " | maker bids off"
     if not sniper_on(cfg):                            # PATCH: longshot strategies
         parts = ["sniper off"]
     follow = {"bet": ", follows the GTD bet", "prediction": ", follows the GTD prediction",
               "either": ", follows the GTD bet or prediction"}.get(cfg.get("follow"), ", any side")   # PATCH: longshot follow
-    return (f"stake {stake_text(cfg)}, GTD, max {cfg.get('max_per_window', 1)}/window, last {cfg.get('look_s', 60)}s{follow} | "
+    one_str = " | 1-at-a-time on" if one_at_a_time_on(cfg) else " | 1-at-a-time off"
+    ot = str(cfg.get("order_type") or "FAK").upper()
+    return (f"stake {stake_text(cfg)}, {ot}, max {cfg.get('max_per_window', 1)}/window, last {cfg.get('look_s', 60)}s{follow}{one_str} | "
             + ("; ".join(parts) or "no bands") + maker_str + engine_text(cfg))   # PATCH: longshot engine
 
 
@@ -188,6 +210,12 @@ def max_look_s(cfg: Dict[str, Any]) -> float:
 def sniper_on(cfg: Dict[str, Any]) -> bool:
     """PATCH: longshot strategies — the final-minute sniper buys are on (longshot.sniper_enabled)."""
     return bool(cfg.get("sniper_enabled", True))
+
+
+def any_on(cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """Return True if any of the three longshot strategies are switched on."""
+    c = merged(cfg)
+    return bool(sniper_on(c) or maker_on(c) or engine_on(c))
 
 
 def status_line(cfg: Dict[str, Any]) -> str:
@@ -214,8 +242,10 @@ def engine_text(cfg: Dict[str, Any]) -> str:
     slot = "own slot" if cfg.get("engine_own_slot", True) else "one position per window"
     min_s = float(cfg.get("engine_min_seconds_left", 0.0) or 0.0)
     to_str = f"to {min_s:g}s" if min_s > 0 else "until close"
+    again = int(cfg.get("engine_resends", 0) or 0)   # PATCH: engine re-sends
+    again_str = f", up to {again} re-send{'s' if again != 1 else ''}" if again > 0 else ""
     return (f" | engine long shots ≤{float(cfg.get('engine_max_price', 0.10)) * 100:g}¢ "
-            f"(live +{float(cfg.get('engine_cap_cents', 2.0)):g}¢, {to_str}, {stake}, {slot})")
+            f"(live +{float(cfg.get('engine_cap_cents', 2.0)):g}¢{again_str}, {to_str}, {stake}, {slot})")
 
 
 def engine_stake_for(balance: float, cfg: Optional[Dict[str, Any]] = None) -> float:
@@ -404,6 +434,28 @@ def prob_up_exact(spot: float, strike: float, secs_left: float,
     return float(min(1.0, max(0.0, 0.5 * math.erfc(z / math.sqrt(2)))))
 
 
+# PATCH: sniper minimum chance — the sniper leaves a buy alone when the model itself doesn't back it.
+# Two tests, each off at 0: the chance for the side (longshot.sniper_min_chance) and the chance
+# divided by the price (longshot.sniper_min_multiple; 1 = never pay more than the chance).
+def sniper_too_low(cfg: Dict[str, Any], p: float, mult: float) -> Optional[str]:
+    """Why the sniper leaves this buy alone, or None when it may go ahead."""
+    min_p = float((cfg or {}).get("sniper_min_chance") or 0.0)
+    min_m = float((cfg or {}).get("sniper_min_multiple") or 0.0)
+    if min_p > 0 and p < min_p:
+        return f"chance {p:.3f} is under the minimum {min_p:g}"
+    if min_m > 0 and mult < min_m:
+        return f"chance ÷ price ×{mult:.2f} is under the minimum ×{min_m:g}"
+    return None
+
+
+def sniper_min_text(cfg: Dict[str, Any]) -> str:
+    """The status line's part: ", chance at least 0.05, chance ÷ price at least ×1" or nothing."""
+    min_p = float((cfg or {}).get("sniper_min_chance") or 0.0)
+    min_m = float((cfg or {}).get("sniper_min_multiple") or 0.0)
+    return ((f", chance at least {min_p:g}" if min_p > 0 else "")
+            + (f", chance ÷ price at least ×{min_m:g}" if min_m > 0 else ""))
+
+
 # ── Decision ──────────────────────────────────────────────────────────────────
 def decide(p_up: float, books: Dict[str, Dict[str, Optional[float]]], secs_left: float,
            cfg: Dict[str, Any], sides=None) -> Dict[str, Any]:
@@ -416,6 +468,7 @@ def decide(p_up: float, books: Dict[str, Dict[str, Optional[float]]], secs_left:
     if secs_left < cutoff:
         return {"action": "NO_TRADE", "reason": "longshot_past_cutoff"}
     best, reasons, skipped = None, [], []
+    weak: Dict[str, str] = {}                         # PATCH: sniper minimum chance — side -> why it is left alone
     for side in ("UP", "DOWN"):
         p = p_up if side == "UP" else 1.0 - p_up
         bk = books.get(side) or {}
@@ -440,6 +493,10 @@ def decide(p_up: float, books: Dict[str, Dict[str, Optional[float]]], secs_left:
                     skipped.append(side)
                 continue
             mult = p / ask if ask > 0 else 0.0
+            low = sniper_too_low(cfg, p, mult)        # PATCH: sniper minimum chance — in the band, but the model doesn't back it
+            if low:
+                weak[side] = low
+                continue
             cand = {"action": "ENTER", "side": side, "band": name, "prob": p, "price": ask,
                     "multiple": mult, "max_price": max_price,
                     "phase": "LONGSHOT", "strength": "LONGSHOT", "reason": f"longshot_{name}"}
@@ -447,6 +504,8 @@ def decide(p_up: float, books: Dict[str, Dict[str, Optional[float]]], secs_left:
                 best = cand
     if best:
         return best
+    if weak:                                                     # PATCH: sniper minimum chance
+        return {"action": "NO_TRADE", "reason": "longshot_chance_low_" + "_".join(sorted(weak)), "weak": weak, "skipped": skipped}
     if skipped:                                                  # PATCH: longshot follow
         return {"action": "NO_TRADE", "reason": "longshot_follow_skip_" + "_".join(skipped), "skipped": skipped}
     return {"action": "NO_TRADE", "reason": "; ".join(reasons[:4]) or "longshot_no_band"}

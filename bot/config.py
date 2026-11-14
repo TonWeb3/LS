@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     COPY_RESTING_TIMEOUT_S: float = 2.0
     # PATCH: fill-and-kill copy — config.json "copy_fak"; bot/copy_fak.py has the defaults and the checks
     COPY_FAK: Dict = {}
+    # PATCH: price stream — config.json "price_stream"; bot/polybolt.py has the defaults and the checks
+    PRICE_STREAM: Dict = {}
 
     # ── Live trading (Polymarket CLOB V2) ───────────────────────────────────────
     # The wallet is DERIVED from PRIVATE_KEY (hex key or 12/24-word seed phrase) and
@@ -167,6 +169,11 @@ def load_settings():
         base_settings.LONGSHOT = _longshot.merged({})
     except Exception:
         base_settings.LONGSHOT = {}
+    try:                                   # PATCH: price stream — its defaults (everything off)
+        from bot import polybolt as _polybolt
+        base_settings.PRICE_STREAM = _polybolt.merged({})
+    except Exception:
+        base_settings.PRICE_STREAM = {}
     config_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else "config.json"
     if os.path.exists(config_path):
         try:
@@ -186,6 +193,14 @@ def load_settings():
                     base_settings.COPY_FAK = dict(_copy_fak.DEFAULTS)
                 except Exception:
                     pass
+
+            # PATCH: price stream — config.json "price_stream", checked (everything stays off if it doesn't pass)
+            if "price_stream" in config_data:
+                try:
+                    from bot import polybolt as _polybolt
+                    base_settings.PRICE_STREAM = _polybolt.normalize(config_data["price_stream"])
+                except Exception as e:
+                    print(f"Warning: Failed to load price_stream config: {e}")
 
             if "mode" in config_data: base_settings.MODE = config_data["mode"]
             if "paper_balance_usd" in config_data: base_settings.PAPER_BALANCE_USD = config_data["paper_balance_usd"]

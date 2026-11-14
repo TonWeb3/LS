@@ -33,6 +33,15 @@ from .config import settings
 ORDER_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="order-io")
 
 
+def _tx_hash(tx: Any) -> str:
+    """FIX: redeem log. The relayer calls give back the whole transaction receipt; this is its hash
+    (what the log, the state file and is_tx_confirmed need). Anything else is passed on as text."""
+    h = getattr(tx, "tx_hash", None) or getattr(tx, "transaction_hash", None)
+    if h is None and isinstance(tx, dict):
+        h = tx.get("tx_hash") or tx.get("transactionHash") or tx.get("transaction_hash")
+    return str(h if h is not None else tx)
+
+
 def _to_float(x) -> Optional[float]:
     try:
         if x is None:
@@ -956,7 +965,7 @@ class ClobTrader:
                 order_type_str=otype,
                 expiration_str=str(exp) if otype == "GTD" else "0",
                 neg_risk=False,
-                post_only=bool(post_only) and otype in ("GTC", "GTD"),
+                post_only=bool(post_only),
             )
             return self._limit_buy_result(data, order_price, order_size, exp)
         except Exception as e:
@@ -1068,7 +1077,7 @@ class ClobTrader:
             order_price, order_size, exp, side_int, maker_amt, taker_amt = self._limit_buy_amounts(size, price, expiration, tick)
             post_args = self._post_args(token_id, maker_amt, taker_amt, side_int, otype,
                                         str(exp) if otype == "GTD" else "0", False,
-                                        bool(post_only) and otype in ("GTC", "GTD"))
+                                        bool(post_only))
             try:
                 ticket = mod.post_order_async(*post_args)
             except TypeError:
@@ -1272,16 +1281,29 @@ class ClobTrader:
         except Exception:
             return []
 
-    def get_token_fills_in_window(self, token_id: str, start_ts: float, end_ts: float) -> List[Dict[str, Any]]:
-        """Find fills for a token that occurred within a given timestamp window."""
+    def get_token_fills_in_window(self, token_id: str, start_ts: float, end_ts: float,
+                                  skip_order_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """This wallet's own BUY fills of one token inside a time window.
+
+        FIX: wallet reconciliation. A record in Polymarket's trades list is the TAKER's trade: its
+        size and price are the taker's. When this wallet's order was only one of the makers in it,
+        this wallet's part is in the record's maker_orders (matched_amount, price), and that order
+        can be on the market's other token. So only these count:
+          * a record in which this wallet was the taker and bought: the record's size and price;
+          * this wallet's own maker orders in a record, when they bought this token: their own
+            matched amount and price.
+        skip_order_ids: the orders of the bot's other trades and the maker's open bids; they are
+        never counted here."""
         if not token_id or not self.ensure_ready() or not self.clob:
             return []
         try:
             trades = self.clob.get_trades(token_id=str(token_id))
             if not trades:
                 return []
+            skip = {str(o).lower() for o in (skip_order_ids or []) if o}
+            mine = {str(a).lower() for a in (self.funder, self.get_eoa_address()) if a}
             matching = []
-            for t in trades[:30]:
+            for t in trades[:200]:
                 td = t.model_dump() if hasattr(t, "model_dump") else dict(t)
                 mt = td.get("match_time")
                 trade_ts = None
@@ -1293,14 +1315,32 @@ class ClobTrader:
                             trade_ts = datetime.fromisoformat(str(mt).replace('Z', '+00:00')).timestamp()
                     except Exception:
                         pass
-
-                if trade_ts is None or (start_ts - 60 <= trade_ts <= end_ts + 60):
-                    matching.append({
-                        "size": float(td.get("size") or 0.0),
-                        "price": float(td.get("price") or 0.0),
-                        "side": td.get("side"),
-                        "trade_id": td.get("trade_id")
-                    })
+                if not (trade_ts is None or (start_ts - 60 <= trade_ts <= end_ts + 60)):
+                    continue
+                taker_side = str(td.get("side") or "").upper()
+                if str(td.get("trader_side") or "").upper() == "TAKER":
+                    # this wallet's own order took: the record's size and price are its own
+                    if taker_side == "BUY" and str(td.get("taker_order_id") or "").lower() not in skip:
+                        matching.append({"size": float(td.get("size") or 0.0), "price": float(td.get("price") or 0.0),
+                                         "side": "BUY", "trade_id": td.get("trade_id")})
+                    continue
+                # this wallet's order(s) were among the makers: only their own amounts, only on this token
+                for m in (td.get("maker_orders") or []):
+                    md = m.model_dump() if hasattr(m, "model_dump") else dict(m)
+                    if str(md.get("maker_address") or "").lower() not in mine:
+                        continue
+                    if str(md.get("token_id") or md.get("asset_id") or "") != str(token_id):
+                        continue
+                    if str(md.get("order_id") or "").lower() in skip:
+                        continue
+                    # on the taker's own token the maker is on the opposite side; on the market's other
+                    # token (matched by minting or merging) it is on the same side
+                    same = str(md.get("outcome") or "").strip().lower() == str(td.get("outcome") or "").strip().lower()
+                    maker_side = taker_side if not same else ("SELL" if taker_side == "BUY" else "BUY")
+                    amount = float(md.get("matched_amount") or 0.0)
+                    if maker_side == "BUY" and amount > 0:
+                        matching.append({"size": amount, "price": float(md.get("price") or 0.0),
+                                         "side": "BUY", "trade_id": td.get("trade_id")})
             return matching
         except Exception:
             return []
@@ -1334,7 +1374,7 @@ class ClobTrader:
         try:
             amts = [float(a) for a in (amounts if isinstance(amounts, (list, tuple)) else [amounts])]
             tx = self.gasless.redeem_position(condition_id, amts, neg_risk)
-            return {"ok": True, "tx": str(tx)}
+            return {"ok": True, "tx": _tx_hash(tx)}
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -1401,7 +1441,7 @@ class ClobTrader:
                     "pUSD Transfer",
                     metadata="pusd_transfer",
                 )
-                return {"ok": True, "tx": str(tx), "token": "pUSD", "from": target_funder}
+                return {"ok": True, "tx": _tx_hash(tx), "token": "pUSD", "from": target_funder}
 
             # 2. If wallet holds bridged USDC.e >= amount, transfer USDC.e
             if usdc_e_bal >= amount:
@@ -1412,7 +1452,7 @@ class ClobTrader:
                     "pUSD Transfer",
                     metadata="pusd_transfer",
                 )
-                return {"ok": True, "tx": str(tx), "token": "USDC.e", "from": target_funder}
+                return {"ok": True, "tx": _tx_hash(tx), "token": "USDC.e", "from": target_funder}
 
             # 3. Fallback if RPC balance read returned 0.0 but CLOB API reports sufficient collateral
             clob_bal = 0.0
@@ -1431,7 +1471,7 @@ class ClobTrader:
                         "pUSD Transfer",
                         metadata="pusd_transfer",
                     )
-                    return {"ok": True, "tx": str(tx), "token": "pUSD", "from": target_funder}
+                    return {"ok": True, "tx": _tx_hash(tx), "token": "pUSD", "from": target_funder}
                 except Exception:
                     tx = target_gasless._execute(
                         target_gasless.usdc_e_address,
@@ -1439,7 +1479,7 @@ class ClobTrader:
                         "pUSD Transfer",
                         metadata="pusd_transfer",
                     )
-                    return {"ok": True, "tx": str(tx), "token": "USDC.e", "from": target_funder}
+                    return {"ok": True, "tx": _tx_hash(tx), "token": "USDC.e", "from": target_funder}
 
             return {
                 "ok": False,

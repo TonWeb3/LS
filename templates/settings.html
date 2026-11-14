@@ -51,14 +51,22 @@
             <!-- Markets -->
             <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
                 <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Market Configuration</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+                    <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Market Timeframe (Active Bot Trading)</label>
+                        <select x-model.number="form.trading.candle_window_minutes" @change="onTimeframeChange()" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                            <option :value="15">15 Minutes (15m Strategy)</option>
+                            <option :value="5">5 Minutes (5m Strategy)</option>
+                        </select>
+                        <p class="text-[10px] text-gray-400 mt-2 italic">Determines which market timeframe the bot actively trades. The 15M / 5M buttons on the dashboard are for view-only inspection and do not switch live trading.</p>
+                    </div>
                     <div>
                         <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Binance Symbol</label>
                         <input type="text" x-model="form.trading.symbol" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="BTCUSDT">
                     </div>
                     <div>
                         <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Polymarket Series</label>
-                        <select x-model="form.polymarket.series_id" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <select x-model="form.polymarket.series_id" @change="onSeriesChange()" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
                             <template x-for="s in availableSeries" :key="s.series_id">
                                 <option :value="s.series_id" x-text="s.title" :selected="s.series_id == form.polymarket.series_id"></option>
                             </template>
@@ -144,33 +152,62 @@
                 <div class="space-y-4">
                     <div>
                         <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Strategies</label>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <label class="flex items-center gap-3 bg-gray-700 rounded-lg p-2.5 text-white cursor-pointer">
+                                <input type="checkbox" x-model="form.longshot.engine_enabled" class="w-5 h-5">
+                                <span>Engine: model entries (≤10¢)</span>
+                            </label>
                             <label class="flex items-center gap-3 bg-gray-700 rounded-lg p-2.5 text-white cursor-pointer">
                                 <input type="checkbox" x-model="form.longshot.sniper_enabled" class="w-5 h-5">
-                                <span>Sniper: final-minute buys in the band</span>
+                                <span>Sniper: final-minute buys</span>
                             </label>
                             <label class="flex items-center gap-3 bg-gray-700 rounded-lg p-2.5 text-white cursor-pointer">
                                 <input type="checkbox" x-model="form.longshot.maker_enabled" class="w-5 h-5">
-                                <span>Maker bids: resting bids in the last minute</span>
+                                <span>Maker: resting 1¢ bids</span>
                             </label>
                         </div>
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Tick the long shots the bot runs; untick both to switch long shots off. Follow and the stakes below apply to the ones that are on.</p>
-                    </div>
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Follow</label>
-                        <select x-model="form.longshot.follow" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white">
-                            <option value="bet">The window's GTD bet (its first one)</option>
-                            <option value="prediction">The GTD prediction at that moment</option>
-                            <option value="either">Either one: the GTD bet or the prediction</option>
-                            <option value="off">Off: either side</option>
-                        </select>
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Which side a long shot (sniper buy or maker bid) may take. GTD bet: a window without a GTD bet gets no long shot. Either one: the bet's side or the predicted side, both when they differ.</p>
+                        <div class="mt-3">
+                            <label class="flex items-center gap-3 bg-gray-700/80 border border-gray-600 rounded-lg p-3 text-white cursor-pointer hover:bg-gray-700 transition">
+                                <input type="checkbox" x-model="form.longshot.one_at_a_time" class="w-5 h-5 accent-emerald-500 rounded">
+                                <div>
+                                    <span class="font-bold text-sm">One Longshot at a Time (Exclusive Mode)</span>
+                                    <p class="text-[11px] text-gray-400">Only open/place ONE longshot strategy per window. The first strategy to place an order locks the window; the others will not open to prevent double or triple losses.</p>
+                                </div>
+                            </label>
+                        </div>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Tick the longshot strategies the bot runs. Untick all to switch long shots off.</p>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Longshot Order Type (FAK / FOK / GTD)</label>
+                            <select x-model="form.longshot.order_type" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white">
+                                <option value="FAK">FAK (Fill-And-Kill / Immediate or Cancel)</option>
+                                <option value="FOK">FOK (Fill-Or-Kill / All-or-None Fill)</option>
+                                <option value="GTD">GTD (Good 'Til Date / Resting Limit Order)</option>
+                            </select>
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Execution order type used for all longshot trades.</p>
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Follow</label>
+                            <select x-model="form.longshot.follow" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white">
+                                <option value="bet">The window's GTD bet (its first one)</option>
+                                <option value="prediction">The GTD prediction at that moment</option>
+                                <option value="either">Either one: the GTD bet or the prediction</option>
+                                <option value="off">Off: either side</option>
+                            </select>
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Which side a long shot (sniper buy or maker bid) may take. GTD bet: a window without a GTD bet gets no long shot. Either one: the bet's side or the predicted side, both when they differ.</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Engine Stake (% of balance)</label>
+                            <input type="number" step="any" min="0" max="100" x-model.number="form.longshot.engine_stake_pct" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Engine longshots (≤10¢). 0 = the regular GTD stake (10% balance).</p>
+                        </div>
+                        <div>
                             <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Sniper Stake (% of balance)</label>
                             <input type="number" step="any" min="0" max="100" x-model.number="form.longshot.sniper_stake_pct" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="1">
-                            <p class="text-[10px] text-gray-500 mt-2 italic">Each sniper buy, apart from the GTD stake. At least $1. 0 = the GTD stake.</p>
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Each sniper buy. At least $1. 0 = the GTD stake.</p>
                         </div>
                         <div>
                             <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Maker Bid Stake (% of balance)</label>
@@ -193,16 +230,36 @@
                             <p class="text-[10px] text-gray-500 mt-2 italic">Absolute highest price to fill a longshot sniper trade (1¢ cap).</p>
                         </div>
                     </div>
+                    <!-- PATCH: sniper minimum chance -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Sniper Minimum Chance</label>
+                            <input type="number" step="any" min="0" max="1" x-model.number="form.longshot.sniper_min_chance" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">No sniper buy while the model's chance for that side is under this (0.05 = 5%). 0 = no test.</p>
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Sniper Minimum Chance ÷ Price</label>
+                            <input type="number" step="any" min="0" max="1000" x-model.number="form.longshot.sniper_min_multiple" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">No sniper buy while the chance divided by the ask is under this (1 = never pay more than the chance; a 2% chance at 1¢ is 2). 0 = no test.</p>
+                        </div>
+                    </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-700/60">
                         <div>
                             <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Resting Maker Bid Price ($)</label>
                             <input type="number" step="0.001" min="0.001" max="0.10" x-model.number="form.longshot.maker.price" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0.01">
                         </div>
+                        <!-- PATCH: engine re-sends -->
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Engine Long Shot Re-sends</label>
+                            <input type="number" step="1" min="0" max="50" x-model.number="form.longshot.engine_resends" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="0">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">How often an engine long shot that found nothing (or only part) at its price goes out again when the ask is back at that price or under. 0 = it is sent once.</p>
+                        </div>
                     </div>
                     <p class="text-[10px] text-gray-500 mt-2 italic">Places a resting GTD maker bid (default 1¢) in the final minute.</p>
                 </div>
             </div>
+
 
             <!-- Auto-withdrawal (capital extractor) -->
             <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
@@ -466,11 +523,9 @@
                 <input type="checkbox" x-model="form.settlement.redeem_after_resolution">
                 <input type="checkbox" x-model="form.settlement.confirm_official">
 
-                <input type="checkbox" x-model="form.longshot.engine_enabled">
                 <input type="number" step="0.001" min="0.001" max="0.99" x-model.number="form.longshot.engine_max_price">
                 <input type="number" step="0.5" min="0" max="900" x-model.number="form.longshot.engine_min_seconds_left">
                 <input type="number" step="0.5" min="0" max="99" x-model.number="form.longshot.engine_cap_cents">
-                <input type="number" step="any" min="0" max="100" x-model.number="form.longshot.engine_stake_pct">
                 <input type="checkbox" x-model="form.longshot.engine_own_slot">
             </div>
 
@@ -708,7 +763,7 @@
                     has_live_creds: false,
                     private_key: '',
                     polymarket: { series_id: '' },
-                    trading: { symbol: 'BTCUSDT', risk_type: 'percent', risk_value: 10 },
+                    trading: { symbol: 'BTCUSDT', candle_window_minutes: 15, risk_type: 'percent', risk_value: 10 },
                     ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0 },
                     live: { relayer_api_key: '', alchemy_api_key: '', funder_address: '', max_slippage: 0.05, allow_partial_fill: true },
                     flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 },
@@ -717,11 +772,15 @@
                     telegram: { enabled: false, bot_token: '' },
                     settlement: { redeem_after_resolution: false, confirm_official: false },
                     longshot: {
+                        one_at_a_time: true,
                         max_per_window: 1,
                         look_s: 60,
                         cutoff_s: 0,
                         follow: 'either',
+                        order_type: 'FAK',
                         sniper_stake_pct: 1,
+                        sniper_min_chance: 0,
+                        sniper_min_multiple: 0,
                         maker_stake_pct: 1,
                         sniper_enabled: true,
                         maker_enabled: true,
@@ -731,6 +790,7 @@
                         engine_cap_cents: 2,
                         engine_stake_pct: 0,
                         engine_own_slot: true,
+                        engine_resends: 0,
                         maker: { price: 0.01 },
                         bands: {
                             final: { ask_min: 0.001, ask_max: 0.01, max_price: 0.01 }
@@ -769,6 +829,23 @@
                 tgSubsBusy: false,
                 tgResult: '',
                 tgOk: false,
+                onTimeframeChange() {
+                    const tf = parseInt(this.form.trading?.candle_window_minutes || 15);
+                    const sym = (this.form.trading?.symbol || 'BTC').replace('USDT', '').replace('USD', '').toLowerCase();
+                    const match = this.availableSeries.find(s => s.candle_window_minutes === tf && (s.slug?.toLowerCase().includes(sym) || s.title?.toLowerCase().includes(sym)));
+                    if (match) {
+                        this.form.polymarket.series_id = match.series_id;
+                    } else {
+                        const anyMatch = this.availableSeries.find(s => s.candle_window_minutes === tf);
+                        if (anyMatch) this.form.polymarket.series_id = anyMatch.series_id;
+                    }
+                },
+                onSeriesChange() {
+                    const sel = this.availableSeries.find(s => s.series_id == this.form.polymarket.series_id);
+                    if (sel && sel.candle_window_minutes) {
+                        this.form.trading.candle_window_minutes = sel.candle_window_minutes;
+                    }
+                },
                 effectiveWithdrawTarget() {
                     const w = (this.form.capital_extractor?.withdraw_address || '').trim();
                     if (w && w.startsWith('0x') && w.length === 42) {

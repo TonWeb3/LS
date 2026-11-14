@@ -144,6 +144,18 @@ class MakerManager:
                  "live": b.live, "state": b.state, "age_s": round(now - b.placed_ts, 1), "order_id": b.order_id}
                 for b in self.bids.values() if b.state in ("placing", "resting", "cancelling", "cancelled")]
 
+    def has_active_bid(self, start_ms: int) -> bool:
+        """True if any maker bid for start_ms is placing or resting on the book."""
+        return any(b.start_ms == int(start_ms) and b.state in ("placing", "resting")
+                   for b in self.bids.values())
+
+    async def cancel_window(self, start_ms: int, reason: str = "cancelled") -> None:
+        """Cancel all resting bids for a specific window immediately."""
+        now = self._now()
+        for b in list(self.bids.values()):
+            if b.start_ms == int(start_ms) and b.state == "resting":
+                await self._cancel(b, reason, now)
+
     # ── input from the long-shot check ───────────────────────────────────────
     async def on_view(self, view: Dict[str, Any]) -> None:
         """The latest chance and window, from evaluate_longshot (no network): stores it, counts
@@ -361,6 +373,10 @@ class MakerManager:
         if not (maker_cutoff <= secs_left <= maker_look):
             return {}
         start_ms = int(v["start_ms"])
+        if full.get("one_at_a_time", True):
+            has_other = getattr(self.h, "has_other_longshot", None)
+            if has_other and has_other(start_ms):
+                return {}
         filled_sides = {b.side for b in self.bids.values() if b.start_ms == start_ms and b.filled > 1e-9}
         cap_hit = self._win(start_ms)["fills"] >= int(mk.get("max_fills_per_window", 1))
         min_p = float(mk.get("min_prob", 0.2))
@@ -443,6 +459,10 @@ class MakerManager:
 
     def _why_not(self, b: Bid, now: float) -> str:
         full, mk = self._cfg()
+        if full.get("one_at_a_time", True):
+            has_other = getattr(self.h, "has_other_longshot", None)
+            if has_other and has_other(b.start_ms):
+                return "one at a time (another longshot active)"
         v = self.view
         if not L.maker_on(full):
             return "maker bids off"
