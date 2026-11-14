@@ -222,11 +222,15 @@
                         <div class="text-right">
                             <template x-if="data.trading_state?.has_live_creds">
                                 <div>
-                                    <span class="text-xl sm:text-2xl font-bold text-green-500"
-                                          x-text="'$' + (data.trading_state?.equity != null ? data.trading_state.equity.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '0.00')"></span>
-                                    <p class="text-[10px] text-gray-500 uppercase tracking-tighter">
-                                        <span x-text="'Cash $' + (data.trading_state?.balance != null ? data.trading_state.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '0.00')"></span>
-                                        <span x-show="data.trading_state?.open_value > 0" x-text="' + Open $' + (data.trading_state?.open_value != null ? data.trading_state.open_value.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '0.00')"></span>
+                                    <div class="flex items-baseline justify-end gap-1.5">
+                                        <span class="text-xs uppercase text-gray-400 font-bold tracking-wider">Live Balance:</span>
+                                        <span class="text-xl sm:text-2xl font-bold text-green-400 font-mono"
+                                              x-text="'$' + (data.trading_state?.balance != null ? data.trading_state.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '0.00')"></span>
+                                    </div>
+                                    <p class="text-[10px] text-gray-400 font-mono tracking-tight" x-show="data.trading_state?.open_value > 0">
+                                        <span>Open: $<span x-text="(data.trading_state?.open_value != null ? data.trading_state.open_value.toFixed(2) : '0.00')"></span></span>
+                                        <span class="text-gray-600 mx-1">•</span>
+                                        <span>Total Equity: $<span x-text="(data.trading_state?.equity != null ? data.trading_state.equity.toFixed(2) : '0.00')"></span></span>
                                     </p>
                                 </div>
                             </template>
@@ -267,8 +271,8 @@
                                         </td>
                                         <td class="px-4 py-3 font-mono" x-text="(trade.live_status === 'FILLED') ? formatShares(trade.live_shares) : '—'"></td>
                                         <td class="px-4 py-3 font-mono font-bold"
-                                            :class="(trade.live_status === 'FILLED' && trade.live_unrealized_pl != null) ? (Number(trade.live_unrealized_pl) >= 0 ? 'text-green-400' : 'text-red-400') : 'text-gray-500'"
-                                            x-text="(trade.live_status === 'FILLED') ? formatUsd(trade.live_unrealized_pl) : '—'"></td>
+                                            :class="(trade.live_status === 'FILLED' ? (trade.live_unrealized_pl != null && Number(trade.live_unrealized_pl) >= 0 ? 'text-green-400' : (trade.live_unrealized_pl != null ? 'text-red-400' : 'text-gray-500')) : (trade.paper_unrealized_pl != null && Number(trade.paper_unrealized_pl) >= 0 ? 'text-green-400' : (trade.paper_unrealized_pl != null ? 'text-red-400' : 'text-gray-500')))"
+                                            x-text="trade.live_status === 'FILLED' ? (trade.live_unrealized_pl != null ? formatUsd(trade.live_unrealized_pl) : '—') : (trade.paper_unrealized_pl != null ? formatUsd(trade.paper_unrealized_pl) : '—')"></td>
                                         <td class="px-4 py-3 text-[10px] space-y-0.5">
                                             <div class="flex items-center gap-1.5">
                                                 <span class="text-gray-500 font-bold uppercase text-[9px]">Paper:</span>
@@ -421,7 +425,7 @@
                         </p>
                     </div>
                     <div class="bg-black rounded p-3 sm:p-4 h-64 sm:h-80 overflow-y-auto font-mono text-[10px] sm:text-xs leading-relaxed border border-gray-700">
-                        <template x-for="log in logs" :key="log">
+                        <template x-for="(log, idx) in logs" :key="idx">
                             <div class="mb-1 border-b border-gray-900 pb-1" :class="log.includes('WIN') ? 'text-green-400' : (log.includes('LOSS') ? 'text-red-400' : 'text-gray-400')">
                                 <span x-text="log"></span>
                             </div>
@@ -491,9 +495,16 @@
                     const snap = (frame && frame.type === 'state_update') ? frame.data : frame;
                     if (snap && Object.keys(snap).length) this.data = snap;
                     // Merge WS-only fields that are not part of the inner state dict
+                    const seq = (frame && frame.log_seq != null) ? frame.log_seq : null;
                     if (frame && frame.type === 'state_update') {
-                        if (frame.logs != null) this.logs = (frame.logs || []).slice().reverse();
-
+                        if (seq != null && (seq !== this.lastLogSeq || !this.logs.length)) {
+                            this.lastLogSeq = seq;
+                            if (frame.logs != null) {
+                                this.logs = (frame.logs || []).slice().reverse();
+                            } else if (this.tab === 'logs') {
+                                this.refreshLogs();
+                            }
+                        }
                     }
                     this.lastUpdate = new Date().toLocaleTimeString();
                     // Keep Start/Stop in sync with the server, but not while a click is
@@ -502,16 +513,10 @@
                     if (!this.botBusy && Date.now() > this.suppressSyncUntil && ts?.running != null) {
                         this.running = !!ts.running;
                     }
-                    // Sequence number tells us when to fetch fresh log lines.
-                    const seq = (frame && frame.log_seq != null) ? frame.log_seq : null;
-                    if (seq != null && seq !== this.lastLogSeq) {
-                        this.lastLogSeq = seq;
-                        if (this.tab === 'logs') this.refreshLogs();
-                    }
                     if (this.tab === 'history' && (!this._lastHistorySeq || this._lastHistorySeq !== seq)) {
-                    this._lastHistorySeq = seq;
-                    this.loadHistory();
-                }
+                        this._lastHistorySeq = seq;
+                        this.loadHistory();
+                    }
                 },
                 async loadHistory() {
                     try { this.tradeHistory = (await (await fetch('/history')).json()).reverse(); }
@@ -682,7 +687,9 @@
                     try {
                         const response = await fetch('/api/logs');
                         const logs = await response.json();
-                        this.logs = logs.reverse();
+                        if (Array.isArray(logs)) {
+                            this.logs = logs.slice().reverse();
+                        }
                     } catch (e) {}
                 },
                 formatTime(mins) {

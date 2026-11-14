@@ -100,13 +100,70 @@ def _model_steps(minutes_left: float):
         return max(0.05, round(minutes_left / 5.0, 4))
     return max(1, math.ceil(minutes_left / 5))
 
+def _update_trade_unrealized_pl(trade: Dict[str, Any], market_prices: Optional[Dict[str, Any]] = None):
+    token_id = trade.get("token_id")
+    mark_px = None
+
+    # 1. Try WebSocket orderbook for the token
+    ws_stream = globals().get("polymarket_clob_ws")
+    if token_id and ws_stream and hasattr(ws_stream, "get_token_market"):
+        try:
+            book = ws_stream.get_token_market(token_id)
+            if book:
+                best_bid = book.get("best_bid")
+                best_ask = book.get("best_ask")
+                if best_bid is not None and best_ask is not None:
+                    mark_px = (float(best_bid) + float(best_ask)) / 2.0
+                elif best_bid is not None:
+                    mark_px = float(best_bid)
+                elif best_ask is not None:
+                    mark_px = float(best_ask)
+        except Exception:
+            pass
+
+    # 2. Fall back to current market prices in state / snapshot
+    if mark_px is None:
+        side = str(trade.get("side", "")).upper()
+        prices = market_prices or (state.get("latest_data") or {}).get("prices") or {}
+        if side == "UP":
+            mark_px = prices.get("poly_up") or prices.get("up") or state.get("last_poly_up")
+        elif side == "DOWN":
+            mark_px = prices.get("poly_down") or prices.get("down") or state.get("last_poly_down")
+
+    # 3. Fall back to entry price
+    if mark_px is None:
+        mark_px = trade.get("live_entry_price") or trade.get("paper_entry_price")
+
+    if mark_px is not None:
+        try:
+            mark_px = float(mark_px)
+            trade["live_mark_price"] = mark_px
+
+            # Live unrealized P/L
+            if trade.get("live_status") == "FILLED" and trade.get("live_shares"):
+                live_shares = float(trade["live_shares"])
+                live_entry = float(trade.get("live_entry_price") or mark_px)
+                live_cost = float(trade.get("live_amount") or (live_shares * live_entry))
+                cur_live_val = live_shares * mark_px
+                trade["live_unrealized_pl"] = round(cur_live_val - live_cost, 2)
+
+            # Paper unrealized P/L
+            paper_shares = float(trade.get("paper_shares") or 0.0)
+            paper_entry = float(trade.get("paper_entry_price") or trade.get("entry_price") or 0.0)
+            paper_cost = float(trade.get("paper_amount") or (paper_shares * paper_entry))
+            if paper_shares > 0 and paper_cost > 0:
+                cur_paper_val = paper_shares * mark_px
+                trade["paper_unrealized_pl"] = round(cur_paper_val - paper_cost, 2)
+        except (ValueError, TypeError):
+            pass
+
 def _sync_active_trades_to_latest_data():
     if "trading_state" in state.get("latest_data", {}):
         ts = state["latest_data"]["trading_state"]
         ts["candle_window_minutes"] = settings.CANDLE_WINDOW_MINUTES
-        ts["active_trades"] = list(state["active_trades"])
         live_open_val = 0.0
         for t in state["active_trades"]:
+            _update_trade_unrealized_pl(t)
             if t.get("live_status") == "FILLED" and t.get("live_shares"):
                 try:
                     s = float(t.get("live_shares") or 0.0)
@@ -114,9 +171,10 @@ def _sync_active_trades_to_latest_data():
                     live_open_val += s * p
                 except (ValueError, TypeError):
                     pass
-        ts["open_value"] = live_open_val
+        ts["active_trades"] = list(state["active_trades"])
+        ts["open_value"] = round(live_open_val, 2)
         live_bal = float(state.get("live_balance") or 0.0)
-        ts["equity"] = live_bal + live_open_val
+        ts["equity"] = round(live_bal + live_open_val, 2)
         ts["balance"] = live_bal
         ts["has_live_creds"] = bool(settings.PRIVATE_KEY)
 
@@ -483,11 +541,12 @@ def _json_default(obj):
 async def broadcast_state():
     if not _ws_clients:
         return
+    _sync_active_trades_to_latest_data()
     try:
         msg = json.dumps({
             "type": "state_update",
             "data": state.get("latest_data") or {},
-            "logs": state.get("logs", [])[-20:],
+            "logs": state.get("logs", [])[-100:],
             "log_seq": state.get("log_seq", 0),
         }, default=_json_default)
     except Exception as e:
@@ -3055,6 +3114,12 @@ async def update_trades(current_prices: Dict[str, Any]):
     SETTLEMENT_GRACE_SECONDS = 300
 
     for trade in active_snapshot:
+        if trade.get("status") != "OPEN":
+            trades_changed = True
+            if not any(t.get("trade_id") == trade.get("trade_id") for t in state["trade_history"]):
+                state["trade_history"].append(_archive(trade))
+            continue
+
         if cur_price:
             trade["last_price"] = cur_price
 
@@ -4215,30 +4280,6 @@ async def update_loop():
                         window_start_ms=start_ms
                     )
 
-            live_open_value = 0.0
-            if settings.PRIVATE_KEY and poly_snapshot.get("ok"):
-                for t in state["active_trades"]:
-                    if t.get("live_shares") and t.get("live_status") == "FILLED":
-                        side = t.get("side", "").lower()
-                        cur_bid = poly_snapshot.get("prices", {}).get(side)
-                        if cur_bid:
-                            live_open_value += float(t["live_shares"]) * float(cur_bid)
-
-            live_balance = float(state.get("live_balance") or 0.0)
-            total_equity = live_balance + live_open_value
-            await maybe_auto_withdraw(total_equity, poly_snapshot)
-
-            signal_label = f"BUY {decision['side']}" if decision["action"] == "ENTER" else "NO TRADE"
-            try:
-                utils.append_csv_row(SIGNALS_PATH, csv_header, [
-                    datetime.now().isoformat(), timing["elapsedMinutes"], time_left_min,
-                    signal_label, fair_prob_up, 1 - fair_prob_up, market_up, market_down,
-                    edge["edgeUp"], edge["edgeDown"], f"{decision['side']}:{decision['phase']}:{decision['strength']}" if decision["action"] == "ENTER" else "NO_TRADE",
-                    decision.get("reason", ""), exec_result or ""
-                ])
-            except Exception:
-                pass
-
             prices_active = {
                 "current": current_price,
                 "source": price_source,
@@ -4262,6 +4303,37 @@ async def update_loop():
                 "book_source": poly_snapshot.get("book_source") if poly_snapshot.get("ok") else None,
                 "price_stream": polybolt_feed.view() if polybolt.on(settings.PRICE_STREAM) else None   # PATCH: price stream
             }
+
+            # Resolve, settle and archive trades whose windows have expired
+            try:
+                await update_trades(prices_active)
+            except Exception as e:
+                log_message(f"Error in update_trades: {e}")
+
+            live_open_value = 0.0
+            if settings.PRIVATE_KEY and poly_snapshot.get("ok"):
+                for t in state["active_trades"]:
+                    _update_trade_unrealized_pl(t, poly_snapshot.get("prices", {}))
+                    if t.get("live_shares") and t.get("live_status") == "FILLED":
+                        side = t.get("side", "").lower()
+                        cur_bid = poly_snapshot.get("prices", {}).get(side)
+                        px = float(cur_bid) if cur_bid else float(t.get("live_mark_price") or t.get("live_entry_price") or 0.0)
+                        live_open_value += float(t["live_shares"]) * px
+
+            live_balance = float(state.get("live_balance") or 0.0)
+            total_equity = live_balance + live_open_value
+            await maybe_auto_withdraw(total_equity, poly_snapshot)
+
+            signal_label = f"BUY {decision['side']}" if decision["action"] == "ENTER" else "NO TRADE"
+            try:
+                utils.append_csv_row(SIGNALS_PATH, csv_header, [
+                    datetime.now().isoformat(), timing["elapsedMinutes"], time_left_min,
+                    signal_label, fair_prob_up, 1 - fair_prob_up, market_up, market_down,
+                    edge["edgeUp"], edge["edgeDown"], f"{decision['side']}:{decision['phase']}:{decision['strength']}" if decision["action"] == "ENTER" else "NO_TRADE",
+                    decision.get("reason", ""), exec_result or ""
+                ])
+            except Exception:
+                pass
 
             # View-only snapshot and analysis for non-active timeframe
             other_timing = get_candle_window_timing(other_tf)
@@ -4635,10 +4707,10 @@ async def get_logs():
             with open(LOG_FILE_PATH, "r", encoding="utf-8", errors="ignore") as f:
                 lines = [line.rstrip("\r\n") for line in f if line.strip()]
                 if lines:
-                    return lines
+                    return lines[-100:]
         except Exception:
             pass
-    return state["logs"]
+    return state["logs"][-100:]
 
 DOWNLOADABLE = {
     "signals": (SIGNALS_PATH, "text/csv"),
