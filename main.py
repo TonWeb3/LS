@@ -4133,7 +4133,8 @@ async def update_loop():
                         model_open = c["open"]
                         break
 
-            target_open = strike_open
+            model_open = model_open or win.get("binance") or spot_price
+            target_open = model_open if strike_open is not None else None
             if settle_ms is not None:
                 time_left_min = max(0.0, (settle_ms - time.time() * 1000) / 60_000)
             else:
@@ -4389,7 +4390,7 @@ async def update_loop():
                 other_fair_up = 0.50
                 other_decision = {"action": "NO_TRADE", "side": None, "phase": "EV", "strength": "EV", "reason": "waiting_new_window_strike"}
             else:
-                other_fair_up = indicators.fair_prob_up(spot_price or 0, other_strike, other_mc_steps, sigma_5m, drift_per_step=drift_5m or 0.0)
+                other_fair_up = indicators.fair_prob_up(spot_price or 0, other_model_open or spot_price or other_strike, other_mc_steps, sigma_5m, drift_per_step=drift_5m or 0.0)
                 other_decision = engines.decide_ev({
                     "mcProbUp": other_fair_up,
                     "priceUp": other_m_up,
