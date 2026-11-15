@@ -32,11 +32,15 @@ DEFAULTS: Dict[str, Any] = {
     "cutoff_s": 0.0,           # no new long shots in the last N seconds (0 = until close)
     "follow": "either",        # PATCH: longshot follow — "bet", "prediction", "either" or "off" (see FOLLOW_MODES)
     "order_type": "FAK",       # PATCH: longshot order type — "FAK", "FOK", "GTD" or "GTC"
+    "sniper_order_type": "",   # TOGGLE: order type per kind — "" = the one above; sniper: FAK, FOK, GTD or GTC
+    "maker_order_type": "",    # ... maker: GTD or GTC (a bid has to rest)
+    "engine_order_type": "",   # ... engine: FAK or FOK (one order, gone at once), GTD or GTC (rests at its cap, watched and re-quoted like the sniper's)
     "sniper_stake_pct": 1.0,   # PATCH: longshot stake — % of the balance per sniper buy; 0 = the GTD stake
     "maker_stake_pct": 1.0,    # PATCH: longshot stake — % of the balance per maker bid; 0 = the GTD stake
     "sniper_min_chance": 0.0,  # PATCH: sniper minimum chance — no sniper buy while the model's chance for that side is under this (0.05 = 5%); 0 = no test
     "sniper_min_multiple": 0.0,  # PATCH: sniper minimum chance — ...or while chance ÷ price is under this (1 = never pay more than the chance); 0 = no test
     "one_at_a_time": False,    # only allow one longshot strategy to open per window (first to trigger locks the window)
+    "one_at_a_time_rule": "taken",   # TOGGLE: one-at-a-time rule — "taken": a long shot bought locks the window; "placed": a resting maker bid does too
     "sniper_enabled": True,    # PATCH: longshot strategies — the final-minute sniper buys on/off
     "maker_enabled": True,     # PATCH: longshot strategies — the resting maker bids on/off
     "engine_enabled": True,    # PATCH: longshot engine — the GTD engine's own cheap entries as long shots (the paper bot's kind)
@@ -127,6 +131,17 @@ def normalize(user_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         cfg["order_type"] = ot
     else:
         errs.append('order_type must be "FAK", "FOK", "GTD" or "GTC"')
+    for kind, allowed in (("sniper", ORDER_TYPES), ("maker", ("GTD", "GTC")), ("engine", ORDER_TYPES)):   # TOGGLE: order type per kind
+        own = str(cfg.get(kind + "_order_type") or "").strip().upper()
+        if own == "" or own in allowed:
+            cfg[kind + "_order_type"] = own
+        else:
+            errs.append(f'{kind}_order_type must be empty or one of ' + ", ".join(allowed))
+    rule = str(cfg.get("one_at_a_time_rule") or "taken").strip().lower()   # TOGGLE: one-at-a-time rule
+    if rule in ("taken", "placed"):
+        cfg["one_at_a_time_rule"] = rule
+    else:
+        errs.append('one_at_a_time_rule must be "taken" or "placed"')
     follow = str(cfg.get("follow") or "bet").strip().lower()      # PATCH: longshot follow
     if follow in FOLLOW_MODES:
         cfg["follow"] = follow
@@ -173,9 +188,26 @@ def normalize(user_cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return cfg
 
 
+def order_type_for(cfg: Optional[Dict[str, Any]], kind: str) -> str:
+    """TOGGLE: order type per kind. The order type of one kind of long shot ("sniper", "maker", "engine"): its own
+    setting, or the general one when its own is empty. A maker bid has to rest: GTC when that says GTC, else GTD."""
+    c = cfg or {}
+    ot = str(c.get(kind + "_order_type") or c.get("order_type") or "FAK").strip().upper()
+    if kind == "maker":
+        return "GTC" if ot == "GTC" else "GTD"
+    return ot if ot in ORDER_TYPES else "FAK"
+
+
 def one_at_a_time_on(cfg: Optional[Dict[str, Any]]) -> bool:
     """True when exclusive single-longshot mode is enabled: only one longshot strategy can enter per window."""
     return bool((cfg or {}).get("one_at_a_time", False))
+
+
+def placed_locks(cfg: Optional[Dict[str, Any]]) -> bool:
+    """TOGGLE: one-at-a-time rule. True when "one at a time" is on with the rule "placed": a maker bid that only
+    rests locks the window for the sniper and the engine as well."""
+    c = cfg or {}
+    return bool(c.get("one_at_a_time", False)) and str(c.get("one_at_a_time_rule") or "taken").lower() == "placed"
 
 
 def describe(cfg: Dict[str, Any]) -> str:

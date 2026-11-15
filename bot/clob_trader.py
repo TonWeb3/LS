@@ -965,7 +965,7 @@ class ClobTrader:
                 order_type_str=otype,
                 expiration_str=str(exp) if otype == "GTD" else "0",
                 neg_risk=False,
-                post_only=bool(post_only),
+                post_only=bool(post_only) and otype in ("GTC", "GTD"),
             )
             return self._limit_buy_result(data, order_price, order_size, exp)
         except Exception as e:
@@ -1077,7 +1077,7 @@ class ClobTrader:
             order_price, order_size, exp, side_int, maker_amt, taker_amt = self._limit_buy_amounts(size, price, expiration, tick)
             post_args = self._post_args(token_id, maker_amt, taker_amt, side_int, otype,
                                         str(exp) if otype == "GTD" else "0", False,
-                                        bool(post_only))
+                                        bool(post_only) and otype in ("GTC", "GTD"))
             try:
                 ticket = mod.post_order_async(*post_args)
             except TypeError:
