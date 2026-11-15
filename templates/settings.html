@@ -230,6 +230,14 @@
                             <p class="text-[10px] text-gray-500 mt-2 italic">Absolute highest price to fill a longshot sniper trade (1¢ cap).</p>
                         </div>
                     </div>
+                    <!-- look window -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Look Window (seconds)</label>
+                            <input type="number" step="1" min="1" max="900" x-model.number="form.longshot.look_s" class="w-full bg-gray-700 border-none rounded-lg p-2.5 text-white" placeholder="60">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">The sniper buys and the maker bids only in the last this many seconds of a window (60 = the final minute, 20 = the last 20 seconds). 1 to 900. The engine long shots do not use it.</p>
+                        </div>
+                    </div>
                     <!-- PATCH: sniper minimum chance -->
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>

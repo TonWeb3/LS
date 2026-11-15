@@ -87,7 +87,7 @@
   "funder_address": "",
   "longshot": {
     "max_per_window": 1,
-    "look_s": 60.0,
+    "look_s": 20.0,
     "maker": {
       "price": 0.01
     },
@@ -98,7 +98,7 @@
         "max_price": 0.01
       }
     },
-    "follow": "either",
+    "follow": "off",
     "order_type": "FAK",
     "sniper_stake_pct": 1.0,
     "maker_stake_pct": 1.0,
@@ -111,8 +111,8 @@
     "engine_cap_cents": 2.0,
     "engine_stake_pct": 0.0,
     "engine_own_slot": true,
-    "sniper_min_chance": 0.0,
-    "sniper_min_multiple": 0.0,
+    "sniper_min_chance": 0.03,
+    "sniper_min_multiple": 1.0,
     "engine_resends": 0
   },
   "has_live_creds": true
